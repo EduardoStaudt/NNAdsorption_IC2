@@ -145,7 +145,9 @@ def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_di
             pooled[key][1].append(b)
             row["rmse_" + key] = float(np.sqrt(np.mean((a - b) ** 2)))
         for key, v in _times(p, pred, ref, ev, names).items():
-            row[key + "_rel_err_pct"] = v["rel_err_pct"]
+            row[key + "_rel_err_pct"] = v["rel_err_pct"]  # NaN when PINN or reference never reach the level
+            row[key + "_pinn_s"] = v["pinn_s"]
+            row[key + "_ref_s"] = v["ref_s"]
         for mb in _mole_balance(p, s, pred, ref):
             for kind in ("pinn_vs_ref", "pinn_vs_theory", "ref_vs_theory"):
                 if kind + "_pct_tref" in mb:
@@ -162,6 +164,7 @@ def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_di
     res["per_case_mean_abs"] = {key: float(np.nanmean(np.abs([r.get(key, np.nan) for r in rows]))) for key in keys}
     res["per_case_max_abs"] = {key: float(np.nanmax(np.abs([r.get(key, np.nan) for r in rows]))) for key in keys}
     res["per_case_mean"] = {key: float(np.nanmean([r.get(key, np.nan) for r in rows])) for key in keys}
+    res["per_case_n_finite"] = {key: int(np.sum(np.isfinite([r.get(key, np.nan) for r in rows]))) for key in keys}
     res["inference_ms_per_curve"] = inference_ms(model, table, int(case_indices[0]), len(refs[0]["t"]), int(ev["inference_repeats"]))
     res["n_cases"] = len(rows)
     with open(os.path.join(out_dir, "per_case_metrics.csv"), "w", newline="", encoding="utf-8") as f:

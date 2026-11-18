@@ -5,7 +5,8 @@
     --set key.sub=value overrides the saved config (e.g. new eval.times entries for an old run).
 Single-case runs are compared with the (cached) MOL reference of their case. Parametric runs are
 evaluated on all valid cases of an h5 dataset (e.g. the 10k holdout), with the theta scaler saved
-at training time. Results go to <run>/eval/.
+at training time; --split train|val keeps only the training or validation seeds of the run.
+Results go to <run>/eval/ (or <run>/eval_train/, <run>/eval_val/).
 """
 
 import argparse
@@ -29,13 +30,15 @@ def main():
     ap.add_argument("--run", required=True)
     ap.add_argument("--data", default=None, help="h5 dataset for parametric runs")
     ap.add_argument("--n-plots", type=int, default=6)
+    ap.add_argument("--split", choices=["all", "train", "val"], default="all",
+                    help="parametric runs: evaluate only the training or validation seeds of the run (summary.json)")
     ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="overrides of the saved run config")
     args = ap.parse_args()
 
     run_dir = os.path.abspath(args.run)
     cfg = apply_overrides(load_config(os.path.join(run_dir, "config.yaml")), args.set)
     dtype = runtime.setup_tf(cfg["runtime"])
-    out_dir = os.path.join(run_dir, "eval")
+    out_dir = os.path.join(run_dir, "eval" if args.split == "all" else "eval_" + args.split)
     os.makedirs(out_dir, exist_ok=True)
     n_comp = int(cfg["physics"]["n_comp"])
 
@@ -51,6 +54,11 @@ def main():
             scaler = ThetaScaler.from_dict(json.load(f))
         cases = load_recorder_h5(os.path.abspath(args.data), n_comp, carrier=int(cfg["data"]["carrier"]),
                                  use_internal_profiles=True)
+        if args.split != "all":
+            with open(os.path.join(run_dir, "summary.json"), encoding="utf-8") as f:
+                seeds = json.load(f)[args.split + "_seeds"]
+            by_seed = {c.seed: c for c in cases}
+            cases = [by_seed[sd] for sd in seeds]
         params = [c.params for c in cases]
         table, scales, _, _ = case_table(params, cfg, dtype, scaler=scaler)
         model = make_model(cfg, n_comp)
