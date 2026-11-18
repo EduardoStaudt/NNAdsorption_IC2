@@ -138,12 +138,13 @@ solver:                   # MOL reference solver (physics/mol_solver.py), tests 
 eval:
   aard_min: 1.0e-3        # IC1: AARD only where |reference| > 1e-3
   interpolate_times: true
-  times:                  # IC1 definitions: tb/ts from c_i/c_i,F (recorder), tXX from y_i/y_i,F (compute_level_times)
+  times:                  # tb from c_i/c_i,F (IC1 recorder); t10..ts from y_i/y_i,F (IC1 compute_level_times)
     tb: {level: 0.05, signal: c_ratio}
     t10: {level: 0.10, signal: y_ratio}   # t10/t90: less sensitive than tb/ts to the flat foot and tail of the front
     t50: {level: 0.50, signal: y_ratio}
     t90: {level: 0.90, signal: y_ratio}
-    ts: {level: 0.95, signal: c_ratio}
+    ts: {level: 0.95, signal: y_ratio}    # since Phase 2 (a hot outlet keeps c = yP/RT below 0.95 c_F for long)
+    ts_c: {level: 0.95, signal: c_ratio}  # the former ts (IC1 recorder), kept as an extra column
   field_grid: {nz: 101, nt: 201}
   inference_repeats: 50
   batch_size: 8192

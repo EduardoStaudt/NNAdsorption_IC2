@@ -37,15 +37,30 @@ def test_configured_times_include_t10_and_t90():
     times = load_config(os.path.join(REPO_ROOT, "configs", "pinn_base.yaml"))["eval"]["times"]
     assert times["t10"] == {"level": 0.10, "signal": "y_ratio"}
     assert times["t90"] == {"level": 0.90, "signal": "y_ratio"}
+    assert times["ts"] == {"level": 0.95, "signal": "y_ratio"}  # Phase 2: ts on y_i/y_i,F like t10..t90
+    assert times["ts_c"] == {"level": 0.95, "signal": "c_ratio"}  # former ts, extra column
     # outlet ratio rising linearly from 0 at t = 2 to 1 at t = 8 (component 1 is the front)
     t = np.linspace(0.0, 10.0, 1001)
     ratio = np.clip((t - 2.0) / 6.0, 0.0, 1.0)
     y_feed = np.array([0.6, 0.4])
     y = np.stack([1.0 - 0.4 * ratio, 0.4 * ratio], axis=1)
     out = characteristic_times(t, 100.0 * y, y, 100.0 * y_feed, y_feed, [1], times, interpolate=True)
-    expected = dict(tb=2.3, t10=2.6, t50=5.0, t90=7.4, ts=7.7)
+    expected = dict(tb=2.3, t10=2.6, t50=5.0, t90=7.4, ts=7.7, ts_c=7.7)
     for name, value in expected.items():
         assert out[name][0] == pytest.approx(value, abs=1e-9)
+
+
+def test_ts_on_y_and_on_c_differ_for_a_hot_outlet():
+    # y_1 reaches the feed fraction, but the outlet is 10 % hotter, so c_1 = y_1 P/(R T) stays
+    # 10 % below c_1,F: ts (y) is defined, ts_c (c) is not
+    times = load_config(os.path.join(REPO_ROOT, "configs", "pinn_base.yaml"))["eval"]["times"]
+    t = np.linspace(0.0, 10.0, 1001)
+    ratio = np.clip((t - 2.0) / 6.0, 0.0, 1.0)
+    y_feed = np.array([0.6, 0.4])
+    y = np.stack([1.0 - 0.4 * ratio, 0.4 * ratio], axis=1)
+    out = characteristic_times(t, 100.0 * y / 1.1, y, 100.0 * y_feed, y_feed, [1], times, interpolate=True)
+    assert out["ts"][0] == pytest.approx(7.7, abs=1e-9)
+    assert np.isnan(out["ts_c"][0])
 
 
 def test_outlet_moment_of_a_sharp_front():
