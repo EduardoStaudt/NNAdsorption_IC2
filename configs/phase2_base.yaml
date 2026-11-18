@@ -9,6 +9,8 @@ theta_colloc:             # training/theta_colloc.py
   resample_every_epochs: 10   # new theta every 10 passes over the pool (~2600 steps)
   seed: 1
   scaler_n_theta: 8192    # Sobol theta used to fit the theta normalization (fixed for the run)
+  front_frac: 0.0         # > 0: this fraction of the points of each renewal near the fronts (sum_i |dc~_i/dt~|)
+  front_candidates: 4     # uniform candidates screened per front point
 
 phase2:
   train_data: base_case   # base_case: MOL reference of domain.base_case (Phase 0) | dataset: Phase 1 training split of data.path

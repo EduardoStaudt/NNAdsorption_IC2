@@ -65,6 +65,11 @@ class CollocationPool:
             self.z, self.t, self.case, self.from_rar = self.z[keep], self.t[keep], self.case[keep], self.from_rar[keep]
 
 
+    def replace_initial(self, z, t, case):
+        """Put the given points in place of the first z.size initial (non-RAR) points."""
+        idx = np.flatnonzero(~self.from_rar)[: z.size]
+        self.z[idx], self.t[idx], self.case[idx] = z[: idx.size], t[: idx.size], case[: idx.size]
+
     def renew(self, seed, keep):
         """New quasi-random initial points (new Sobol scramble, random case for each), plus the
         current points where `keep` is True (e.g. RAR points of cases whose theta did not change)."""

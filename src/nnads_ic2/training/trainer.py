@@ -54,6 +54,7 @@ class Trainer:
         self._train_fn = tf.function(self._train_step, jit_compile=bool(tcfg["jit_compile"]))
         self._stats_fn = tf.function(self._grad_stats)
         self._resid_fn = tf.function(self._pointwise_residual)
+        self._front_fn = tf.function(self.losses.front_weight)
         self.step_var = tf.Variable(0, dtype=tf.int64, trainable=False)
         self.skipped = tf.Variable(0, dtype=tf.int64, trainable=False)  # steps with a non-finite loss/gradient
         ckpt = tf.train.Checkpoint(model=model, optimizer=self.opt, step=self.step_var)
@@ -149,18 +150,26 @@ class Trainer:
     def _pointwise_residual(self, z, t, case):
         return self.losses.interior(z, t, case, self.causal.eps)[2]
 
-    # ---- RAR ----------------------------------------------------------------------
+    # ---- RAR, front sampling -------------------------------------------------------
+    def _chunked(self, fn, z, t, case, chunk):
+        """fn at many points, in chunks of a fixed size (the last one padded: no retracing)."""
+        out = np.empty(z.size)
+        for i in range(0, z.size, chunk):
+            sl = slice(i, min(i + chunk, z.size))
+            m = sl.stop - sl.start
+            pad = lambda a: np.concatenate([a[sl], np.repeat(a[sl][-1:], chunk - m)])  # noqa: E731
+            out[sl] = fn(self._col(pad(z)), self._col(pad(t)), self._idx(pad(case))).numpy()[:m]
+        return out
+
+    def front_weights(self, z, t, case):
+        """sum_i |dc~_i/dt~| of the current network (theta_colloc front sampling)."""
+        return self._chunked(self._front_fn, z, t, case, 4 * self.sizes["interior"])
+
     def rar(self):
         rc = self.cfg["sampling"]["rar"]
-        n_cand, n_add, chunk = int(rc["n_candidates"]), int(rc["n_add"]), self.sizes["interior"]
+        n_cand, n_add = int(rc["n_candidates"]), int(rc["n_add"])
         z, t, case = self.pool.candidates(n_cand)
-        vals = np.empty(n_cand)
-        for i in range(0, n_cand, chunk):
-            sl = slice(i, min(i + chunk, n_cand))
-            m = sl.stop - sl.start
-            pad = lambda a: np.concatenate([a[sl], np.repeat(a[sl][-1:], chunk - m)])  # noqa: E731 (fixed shape)
-            r = self._resid_fn(self._col(pad(z)), self._col(pad(t)), self._idx(pad(case)))
-            vals[sl] = r.numpy()[:m]
+        vals = self._chunked(self._resid_fn, z, t, case, self.sizes["interior"])
         idx = select_largest(vals, n_add)
         self.pool.add(z[idx], t[idx], case[idx])
         return float(vals.mean()), float(vals[idx].mean())
@@ -194,7 +203,7 @@ class Trainer:
             if rc["enabled"] and step % int(rc["every"]) == 0 and step < self.steps:
                 rar_info = self.rar()
             if self.resampler is not None and self.resampler.every_steps > 0 and step % self.resampler.every_steps == 0                     and step < self.steps:
-                self.resampler.resample()
+                self.resampler.resample(weight_fn=self.front_weights)
             if step % int(lc["every"]) == 0 or step == self.steps:
                 w_min_v = float(w_min)
                 self.causal.update(w_min_v)

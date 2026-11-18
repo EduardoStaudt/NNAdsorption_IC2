@@ -128,3 +128,21 @@ def test_robust_residual_loss_has_the_gradient_of_the_cauchy_loss(example_case, 
     assert float(tf.reduce_max(s_pt)) > 10 * c  # the test covers the damped region (s >> c)
     # robust_c missing or null: the plain mean squares of Phases 0-1
     assert plain.robust_c == 0.0 and LossBuilder(model, table, dict(cfg, robust_c=None), 1e-6).robust_c == 0.0
+
+
+def test_front_weight_is_the_sum_of_absolute_time_derivatives(example_case, float64):
+    from nnads_ic2.training.losses import LossBuilder, compute_fields
+
+    p, s = example_case
+    arr = case_arrays(p, s, dimensionless_groups(p, s))
+    arr["theta"] = np.zeros(theta_dim(2))
+    table = stack_cases([arr], tf.float64)
+    model = PINN(2, theta_dim(2), MODEL_CFG, t_final=2.0).build_with_dummy()
+    rng = np.random.default_rng(3)
+    z = tf.constant(rng.uniform(0.0, 1.0, (64, 1)))
+    t = tf.constant(rng.uniform(0.0, 2.0, (64, 1)))
+    case = tf.zeros(64, tf.int32)
+    cfg = dict(pde_terms={"mass": 1.0, "ldf": 1.0, "energy": 10.0, "global": 1.0}, causal=dict(enabled=False, n_bins=8))
+    w = LossBuilder(model, table, cfg, p_min=1e-6).front_weight(z, t, case).numpy()
+    c_t = compute_fields(model, z, t, gather_cases(table, case))["c_t"].numpy()
+    np.testing.assert_allclose(w, np.abs(c_t).sum(axis=1), rtol=1e-10)

@@ -122,6 +122,21 @@ class LossBuilder:
         terms = {k: tf.reduce_mean(w * r_w * r2[k]) for k in PDE_TERMS}
         return terms, w_bins, total
 
+    def front_weight(self, z, t, case):
+        """sum_i |dc~_i/dt~| of the network at the points: large where a concentration front passes.
+
+        Along a monotone breakthrough its integral over t~ at a given z~ is |c~_end - c~_start|,
+        whatever the front width, so sampling with this weight puts about the same number of points
+        at every z~ and, at each z~, around the time the front goes by (front sampling).
+        """
+        g = gather_cases(self.table, case)
+        with tf.GradientTape(persistent=True) as tape:
+            tape.watch(t)
+            c_cols = tf.unstack(self.model(model_inputs(z, t, g))["c"], axis=1)
+        w = tf.add_n([tf.abs(tape.gradient(ci, t)) for ci in c_cols])
+        del tape
+        return w[:, 0]
+
     def boundary(self, z_in, t_in, case_in, z_out, t_out, case_out):
         g_in = gather_cases(self.table, case_in)
         rc, rT = inlet_residuals(compute_boundary_fields(self.model, z_in, t_in, g_in), g_in)

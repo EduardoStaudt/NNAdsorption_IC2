@@ -129,3 +129,30 @@ def test_zero_resample_epochs_keeps_the_theta_for_the_whole_run(tmp_path):
     Trainer(cfg, make_model(cfg, 2), col.table, col.pool, str(tmp_path), resampler=col).run()
     assert col.n_resamples == 0
     np.testing.assert_array_equal(col.table["theta"].numpy(), theta0)
+
+
+def test_front_sampling_puts_the_same_number_of_points_per_theta_where_the_weight_is():
+    cfg = small_cfg()
+    cfg["theta_colloc"].update(front_frac=0.5, front_candidates=16)
+    col = make_colloc(cfg)
+    n_rows, k = 17, col.front_per_row
+    assert k == (17 * 8 // 2) // 17
+    col.resample(weight_fn=lambda z, t, case: (t < 1.0).astype(float))  # "front" = first half of t~ in [0, 2]
+    assert col.n_front_draws == 1 and col.info()["front_per_row"] == k
+    np.testing.assert_array_equal(np.bincount(col.pool.case[: n_rows * k], minlength=n_rows), k)
+    assert col.pool.t[: n_rows * k].max() < 1.0  # the replaced points all come from the weighted region
+    assert col.pool.size == 17 * 8
+
+
+def test_trainer_draws_front_points_at_each_renewal(tmp_path):
+    tf.keras.utils.set_random_seed(0)
+    cfg = small_cfg()
+    cfg["theta_colloc"].update(front_frac=0.5)
+    cfg["sampling"]["rar"]["enabled"] = False
+    col = make_colloc(cfg, steps=4)
+    col.every_steps = 2
+    trainer = Trainer(cfg, make_model(cfg, 2), col.table, col.pool, str(tmp_path), resampler=col)
+    trainer.run()
+    assert col.n_resamples == 1 and col.n_front_draws == 1
+    w = trainer.front_weights(col.pool.z[:10], col.pool.t[:10], col.pool.case[:10])
+    assert w.shape == (10,) and np.all(np.isfinite(w)) and np.all(w >= 0)

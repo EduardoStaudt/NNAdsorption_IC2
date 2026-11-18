@@ -13,6 +13,13 @@ continues, so the domain is covered more and more densely during training. The p
 (they were chosen for the old theta). The table rows are tf.Variables, so the compiled training
 step reads the new values without being traced again. resample_every_epochs = 0: the Sobol theta
 are drawn once and kept for the whole run (fixed collocation theta, as the 50 cases of Phase 1).
+
+Front sampling (Phase 3, `front_frac` > 0): at each renewal, that fraction of the new points is
+put near the concentration fronts of the current network instead of uniformly. For every row,
+`front_candidates` uniform candidates per point are screened and kept with probability
+proportional to sum_i |dc~_i/dt~| (LossBuilder.front_weight), without replacement. Every row gets
+the same number of front points, so a few theta with very steep fronts cannot take them all.
+The rest of the pool stays uniform (Sobol); RAR is unchanged.
 """
 
 import numpy as np
@@ -44,13 +51,18 @@ class ThetaCollocation:
         every = float(tc["resample_every_epochs"] or 0)
         self.every_steps = max(1, int(round(every * epoch))) if every > 0 else 0  # 0: never renewed
         self.n_resamples = 0
+        self.front_frac = float(tc.get("front_frac") or 0.0)
+        self.front_candidates = int(tc.get("front_candidates") or 4)
+        self.front_per_row = int(self.front_frac * n_init) // n_rows
+        self.n_front_draws = 0
 
     @property
     def n_theta_seen(self):
         return self.n_theta * (self.n_resamples + 1)
 
-    def resample(self):
-        """New Sobol theta for rows n_fixed.. and new collocation points."""
+    def resample(self, weight_fn=None):
+        """New Sobol theta for rows n_fixed.. and new collocation points (part of them near the
+        fronts when front_frac > 0 and `weight_fn(z, t, case)` gives the front weight)."""
         self.theta_cases = self.sampler.draw(self.n_theta)
         rows, _, _ = case_rows(self.theta_cases, self.cfg, self.scaler)
         new = stack_arrays(self.fixed_rows + rows)
@@ -59,8 +71,27 @@ class ThetaCollocation:
         self.n_resamples += 1
         keep = self.pool.from_rar & (self.pool.case < self.n_fixed)
         self.pool.renew(self.seed + self.n_resamples, keep)
+        if self.front_per_row > 0 and weight_fn is not None:
+            self.front_points(weight_fn)
+
+    def front_points(self, weight_fn):
+        """Replace front_per_row of the uniform points of every row by points near the fronts."""
+        n_rows, k = self.n_fixed + self.n_theta, self.front_per_row
+        m = k * self.front_candidates
+        rng = np.random.default_rng(self.seed + 7919 * (self.n_resamples + 1))
+        z = rng.uniform(0.0, 1.0, (n_rows, m))
+        t = rng.uniform(0.0, self.pool.t_final, (n_rows, m))
+        case = np.repeat(np.arange(n_rows), m).reshape(n_rows, m)
+        w = np.asarray(weight_fn(z.ravel(), t.ravel(), case.ravel()), dtype=float).reshape(n_rows, m)
+        w = np.where(np.isfinite(w), w, 0.0)
+        w += 1e-6 * w.max(axis=1, keepdims=True) + 1e-30  # every candidate keeps a small chance
+        keys = np.log(w) + rng.gumbel(size=w.shape)  # k largest keys = k draws without replacement, P ~ w
+        pick = (np.arange(n_rows)[:, None], np.argpartition(-keys, k - 1, axis=1)[:, :k])
+        self.pool.replace_initial(z[pick].ravel(), t[pick].ravel(), case[pick].ravel())
+        self.n_front_draws += 1
 
     def info(self):
         return dict(n_fixed=self.n_fixed, n_theta=self.n_theta, every_steps=self.every_steps,
                     n_resamples=self.n_resamples, n_theta_seen=self.n_theta_seen, pool_init=self.pool.n_init,
+                    front_frac=self.front_frac, front_per_row=self.front_per_row, n_front_draws=self.n_front_draws,
                     sobol_drawn=self.sampler.n_drawn, sobol_rejected=self.sampler.n_rejected)
