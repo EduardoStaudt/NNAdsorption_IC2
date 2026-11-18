@@ -6,9 +6,9 @@ __pycache__/
 .venv/
 
 # Local outputs: training runs, solver caches, datasets (never versioned)
-runs/
-outputs/
-data/
+/runs/
+/outputs/
+/data/
 *.h5
 
 # Editors / OS
