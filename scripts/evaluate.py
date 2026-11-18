@@ -2,6 +2,7 @@
 
     ~/ic2env/bin/python scripts/evaluate.py --run runs/phase0_single_case
     ~/ic2env/bin/python scripts/evaluate.py --run runs/phase1_parametric --data <holdout.h5>
+    --set key.sub=value overrides the saved config (e.g. new eval.times entries for an old run).
 Single-case runs are compared with the (cached) MOL reference of their case. Parametric runs are
 evaluated on all valid cases of an h5 dataset (e.g. the 10k holdout), with the theta scaler saved
 at training time. Results go to <run>/eval/.
@@ -16,7 +17,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
-from nnads_ic2.config import load_config  # noqa: E402
+from nnads_ic2.config import apply_overrides, load_config  # noqa: E402
 from nnads_ic2.data.loader import load_recorder_h5  # noqa: E402
 from nnads_ic2.eval.report import evaluate_case, evaluate_cases  # noqa: E402
 from nnads_ic2.experiment import case_table, make_model, reference_solution, single_case  # noqa: E402
@@ -28,10 +29,11 @@ def main():
     ap.add_argument("--run", required=True)
     ap.add_argument("--data", default=None, help="h5 dataset for parametric runs")
     ap.add_argument("--n-plots", type=int, default=6)
+    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="overrides of the saved run config")
     args = ap.parse_args()
 
     run_dir = os.path.abspath(args.run)
-    cfg = load_config(os.path.join(run_dir, "config.yaml"))
+    cfg = apply_overrides(load_config(os.path.join(run_dir, "config.yaml")), args.set)
     dtype = runtime.setup_tf(cfg["runtime"])
     out_dir = os.path.join(run_dir, "eval")
     os.makedirs(out_dir, exist_ok=True)
