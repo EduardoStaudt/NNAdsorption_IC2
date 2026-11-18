@@ -1,7 +1,9 @@
 """Evaluation against reference solutions (MOL solver now, v23b dataset later).
 
-A reference is a dict with t, c_out, y_out, T_out, optionally v_out (IC1 recorder files do not
-store it) and, when available, the internal fields z, c, q, T, v_cell (physics/mol_solver.py).
+A reference is a dict with t, c_out, y_out, T_out and optionally v_out (IC1 recorder files do not
+store it). Internal fields, when available, are a separate dict t [k], z [nx], c [k, n, nx],
+q [k, n, nx], T [k, nx], v [k, nx]: `solution_fields` builds it from a MOL solution, and the
+profiles of a dataset case (data/loader.py) already have this form.
 """
 
 import csv
@@ -17,17 +19,25 @@ from .metrics import characteristic_times, front_components, regression_metrics
 from .predict import inference_ms, predict_dimless, predict_outlet
 
 
+def solution_fields(sol):
+    """Internal fields of a MOL solution (physics/mol_solver.py) in the evaluation format."""
+    return dict(t=sol["t"], z=sol["z"], c=sol["c"], q=sol["q"], T=sol["T"], v=sol["v_cell"])
+
+
 def _reference_fields_dimless(ref, s):
     return dict(
         c=ref["c"] / s.C_F,  # [nt, n, nx]
         q=ref["q"] / s.q_ref[None, :, None],
         T=(ref["T"] - s.Tin) / s.dT_ref,  # [nt, nx]
-        v=ref["v_cell"] / s.vs,
+        v=ref["v"] / s.vs,
     )
 
 
-def field_errors(model, table, case_index, p, s, ref, ev, out_dir):
-    """RMSE of each dimensionless field over a regular (z~, t~) grid, plus the error maps."""
+def field_errors(model, table, case_index, p, s, ref, ev, plot_path=None):
+    """RMSE of each dimensionless field over a regular (z~, t~) grid (and the error maps).
+
+    `ref`: internal fields t, z, c, q, T, v (see the module docstring).
+    """
     nz, nt = int(ev["field_grid"]["nz"]), int(ev["field_grid"]["nt"])
     z_cells = ref["z"] / s.L
     t_grid = ref["t"] / s.t_ref
@@ -51,7 +61,8 @@ def field_errors(model, table, case_index, p, s, ref, ev, out_dir):
     pred_maps["T"] = pred["T"][:, 0].reshape(nt, nz)
     ref_maps["v"] = interp(rf["v"])
     pred_maps["v"] = pred["v"][:, 0].reshape(nt, nz)
-    plots.plot_fields(zg, tg, ref_maps, pred_maps, os.path.join(out_dir, "fields_error_maps.png"))
+    if plot_path is not None:
+        plots.plot_fields(zg, tg, ref_maps, pred_maps, plot_path)
     return {k: float(np.sqrt(np.mean((pred_maps[k] - ref_maps[k]) ** 2))) for k in ref_maps}
 
 
@@ -91,8 +102,9 @@ def evaluate_case(model, table, case_index, p, s, ref, cfg, out_dir, names=None,
         res["outlet"]["v_out/vs"] = regression_metrics(pred["v_out"] / p.vs, ref["v_out"] / p.vs, ev["aard_min"])
     res["times"] = _times(p, pred, ref, ev, names)
     res["mole_balance"] = _mole_balance(p, s, pred, ref)
-    if "c" in ref:
-        res["fields_rmse_dimless"] = field_errors(model, table, case_index, p, s, ref, ev, out_dir)
+    if "c" in ref:  # a MOL solution: internal fields available
+        res["fields_rmse_dimless"] = field_errors(model, table, case_index, p, s, solution_fields(ref), ev,
+                                                  os.path.join(out_dir, "fields_error_maps.png"))
     res["inference_ms_per_curve"] = inference_ms(model, table, case_index, len(ref["t"]), int(ev["inference_repeats"]))
     res["n_time_points"] = int(len(ref["t"]))
 
@@ -105,31 +117,51 @@ def evaluate_case(model, table, case_index, p, s, ref, cfg, out_dir, names=None,
     return res
 
 
-def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_dir, n_plots):
-    """Several cases (Phase 1 validation/holdout): metrics pooled over all outlet points, as in IC1,
-    plus per-case characteristic times and mole balance (CSV) and a few outlet figures."""
+def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_dir, n_plots, fields=None):
+    """Several cases (Phase 1 validation/holdout).
+
+    Outlet metrics pooled over all points of all cases, as in IC1; characteristic times, mole
+    balance and field errors per case (CSV) with their mean |value| over the cases; a few figures.
+    `fields`: internal fields per case (or None) for the field errors.
+    """
     ev = cfg["eval"]
     n = params[0].n_comp
     names = ["c%d" % i for i in range(n)]
-    pooled = {k: ([], []) for k in ["y_%s" % nm for nm in names] + ["T_out"]}
+    fields = fields or [None] * len(refs)
+    pooled = {}
     rows = []
-    for j, (k, p, s, ref) in enumerate(zip(case_indices, params, scales, refs)):
+    for j, (k, p, s, ref, fl) in enumerate(zip(case_indices, params, scales, refs, fields)):
         pred = predict_outlet(model, table, int(k), ref["t"], s, int(ev["batch_size"]))
-        for i in range(n):
-            pooled["y_%s" % names[i]][0].append(pred["y_out"][:, i])
-            pooled["y_%s" % names[i]][1].append(ref["y_out"][:, i])
-        pooled["T_out"][0].append(pred["T_out"])
-        pooled["T_out"][1].append(ref["T_out"])
+        pairs = {"y_%s" % names[i]: (pred["y_out"][:, i], ref["y_out"][:, i]) for i in range(n)}
+        pairs["T_out"] = (pred["T_out"], ref["T_out"])
+        if ref.get("v_out") is not None:
+            pairs["v_out/vs"] = (pred["v_out"] / p.vs, ref["v_out"] / p.vs)
         row = dict(case=int(k))
+        for key, (a, b) in pairs.items():
+            pooled.setdefault(key, ([], []))
+            pooled[key][0].append(a)
+            pooled[key][1].append(b)
+            row["rmse_" + key] = float(np.sqrt(np.mean((a - b) ** 2)))
         for key, v in _times(p, pred, ref, ev, names).items():
             row[key + "_rel_err_pct"] = v["rel_err_pct"]
         for mb in _mole_balance(p, s, pred, ref):
-            row["moment_c%d_pinn_vs_theory_pct_tref" % mb["component"]] = mb["pinn_vs_theory_pct_tref"]
+            for kind in ("pinn_vs_ref", "pinn_vs_theory", "ref_vs_theory"):
+                if kind + "_pct_tref" in mb:
+                    row["moment_c%d_%s_pct_tref" % (mb["component"], kind)] = mb[kind + "_pct_tref"]
+        if fl is not None:
+            path = os.path.join(out_dir, "fields_case%03d.png" % k) if j < n_plots else None
+            for key, v in field_errors(model, table, int(k), p, s, fl, ev, path).items():
+                row["field_rmse_" + key] = v
         rows.append(row)
         if j < n_plots:
             plots.plot_outlet(ref, pred, names, os.path.join(out_dir, "outlet_case%03d.png" % k))
+    keys = [key for key in rows[0] if key != "case"]
     res = dict(outlet={k: regression_metrics(np.concatenate(a), np.concatenate(b), ev["aard_min"]) for k, (a, b) in pooled.items()})
-    res["per_case_mean_abs"] = {key: float(np.nanmean(np.abs([r.get(key, np.nan) for r in rows]))) for key in rows[0] if key != "case"}
+    res["per_case_mean_abs"] = {key: float(np.nanmean(np.abs([r.get(key, np.nan) for r in rows]))) for key in keys}
+    res["per_case_max_abs"] = {key: float(np.nanmax(np.abs([r.get(key, np.nan) for r in rows]))) for key in keys}
+    res["per_case_mean"] = {key: float(np.nanmean([r.get(key, np.nan) for r in rows])) for key in keys}
+    res["inference_ms_per_curve"] = inference_ms(model, table, int(case_indices[0]), len(refs[0]["t"]), int(ev["inference_repeats"]))
+    res["n_cases"] = len(rows)
     with open(os.path.join(out_dir, "per_case_metrics.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()

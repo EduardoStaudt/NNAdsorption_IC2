@@ -49,13 +49,15 @@ def main():
     else:
         with open(os.path.join(run_dir, "theta_scaler.json"), encoding="utf-8") as f:
             scaler = ThetaScaler.from_dict(json.load(f))
-        cases = load_recorder_h5(os.path.abspath(args.data), n_comp, carrier=int(cfg["data"]["carrier"]))
+        cases = load_recorder_h5(os.path.abspath(args.data), n_comp, carrier=int(cfg["data"]["carrier"]),
+                                 use_internal_profiles=True)
         params = [c.params for c in cases]
         table, scales, _, _ = case_table(params, cfg, dtype, scaler=scaler)
         model = make_model(cfg, n_comp)
         model.load_weights(os.path.join(run_dir, "model.weights.h5"))
         refs = [dict(t=c.t, c_out=c.c_out, y_out=c.y_out, T_out=c.T_out, v_out=c.v_out) for c in cases]
-        res = evaluate_cases(model, table, list(range(len(cases))), params, scales, refs, cfg, out_dir, args.n_plots)
+        res = evaluate_cases(model, table, list(range(len(cases))), params, scales, refs, cfg, out_dir, args.n_plots,
+                             fields=[c.profiles for c in cases])
     with open(os.path.join(out_dir, "summary_eval.json"), "w", encoding="utf-8") as f:
         json.dump(res, f, indent=2, default=float)
     print(json.dumps(res, indent=1, default=float))

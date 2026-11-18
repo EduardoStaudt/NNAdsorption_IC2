@@ -43,8 +43,9 @@ data loss (outlet / profiles)        residuals of Eqs. (1)-(6) ──► loss te
 | `eval/predict.py`, `eval/report.py`, `eval/plots.py` | predictions in SI units, evaluation reports, figures |
 | `experiment.py` | shared steps of the scripts (case table, model, reference, data points) |
 
-Scripts: `scripts/train_single_case.py` (Phase 0), `scripts/train_parametric.py` (Phase 1),
-`scripts/evaluate.py` (re-evaluate a run, e.g. on the 10k holdout).
+Scripts: `scripts/train_single_case.py` (Phase 0), `scripts/make_mol_dataset.py` (provisional
+Phase 1 data from the MOL solver, tagged `provisório_MOL`), `scripts/train_parametric.py`
+(Phase 1), `scripts/evaluate.py` (re-evaluate a run, e.g. on the 10k holdout).
 Configs: `configs/pinn_base.yaml` (every number), `pinn_single_case.yaml`, `pinn_parametric.yaml`.
 
 ## Network

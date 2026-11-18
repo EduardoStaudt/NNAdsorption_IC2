@@ -4,7 +4,8 @@ Run inside WSL2, from the repository root:
     ~/ic2env/bin/python scripts/train_parametric.py --config configs/pinn_parametric.yaml --data <dataset.h5>
 The dataset is a solver h5 file in the IC1 recorder format (data/loader.py). Cases are split at
 random (seeded) into training and validation cases; the PINN sees solver data only from the
-training cases, and the collocation points cover the training cases.
+training cases, and the collocation points cover the training cases. Internal profiles of the
+validation cases (when the file has them) are used only to score the internal fields.
 """
 
 import argparse
@@ -19,7 +20,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
 from nnads_ic2.config import apply_overrides, load_config, resolve_path, save_config  # noqa: E402
-from nnads_ic2.data.loader import load_recorder_h5  # noqa: E402
+from nnads_ic2.data.loader import dataset_info, load_recorder_h5  # noqa: E402
 from nnads_ic2.data.sampling import CollocationPool  # noqa: E402
 from nnads_ic2.eval.report import evaluate_cases  # noqa: E402
 from nnads_ic2.experiment import case_table, make_model, outlet_data, profile_data, resolve_dT_ratio  # noqa: E402
@@ -62,8 +63,14 @@ def main():
 
     ph = cfg["phase1"]
     n_comp = int(cfg["physics"]["n_comp"])
-    cases = load_recorder_h5(resolve_path(cfg["data"]["path"], ROOT), n_comp, carrier=int(cfg["data"]["carrier"]),
-                             use_internal_profiles=bool(cfg["data"]["use_internal_profiles"]))
+    data_path = resolve_path(cfg["data"]["path"], ROOT)
+    ds_info = dataset_info(data_path)
+    print("dataset %s | tag %s | source: %s" % (data_path, ds_info.get("dataset_tag", "-"), ds_info.get("source", "-")), flush=True)
+    if "MOL" in str(ds_info.get("dataset_tag", "")):
+        print("WARNING: provisional MOL dataset (not v23b): keep these results apart from v23b runs", flush=True)
+    # profiles are always read: training cases use them only if data.use_internal_profiles is true,
+    # validation cases only for the field errors
+    cases = load_recorder_h5(data_path, n_comp, carrier=int(cfg["data"]["carrier"]), use_internal_profiles=True)
     rng = np.random.default_rng(int(ph["split_seed"]))
     perm = rng.permutation(len(cases))
     n_tr, n_val = int(ph["n_train_cases"]), int(ph["n_val_cases"])
@@ -101,13 +108,18 @@ def main():
     val_idx = list(range(n_tr, n_tr + n_val))
     summary = dict(
         validation=evaluate_cases(model, table, val_idx, [c.params for c in val], scales[n_tr:], refs[n_tr:], cfg,
-                                  run_dir, n_plots=int(ph["n_plots"])),
+                                  run_dir, n_plots=int(ph["n_plots"]), fields=[c.profiles for c in val]),
+        dataset=dict(path=data_path, **{k: ds_info.get(k) for k in ("dataset_tag", "source", "created_utc", "git_commit")}),
         train_seeds=[c.seed for c in train],
         val_seeds=[c.seed for c in val],
+        dT_ratio=float(cfg["scales"]["dT_ratio"]),
+        dT_ref_val_K=[s.dT_ref for s in scales[n_tr:]],
         training=dict(device=runtime.device_name(), steps=int(cfg["train"]["steps"]), train_s=timing["train_s"],
                       gpu_hours=timing["train_s"] / 3600.0 if runtime.device_name() == "GPU" else 0.0,
+                      first_step_s=timing.get("first_step_s"), lbfgs=timing.get("lbfgs"),
                       n_params=int(sum(v.numpy().size for v in model.trainable_variables)),
-                      final_lambdas=trainer.weights.as_dict()),
+                      final_lambdas=trainer.weights.as_dict(), final_causal_eps=float(trainer.causal.eps.numpy()),
+                      pool_size=pool.size),
     )
     with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, default=float)
