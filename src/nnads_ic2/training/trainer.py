@@ -3,8 +3,9 @@
 Adam with cosine learning-rate decay, then optional L-BFGS (tensorflow-probability) on a fixed
 batch. Each step draws interior, inlet, outlet (and, if used, initial/data) points; every
 `adaptive.every` steps the loss weights are re-balanced; every `rar.every` steps RAR adds
-collocation points. Every term of the loss, the weights and the time per step go to a CSV file
-(and TensorBoard if enabled); checkpoints are written every `ckpt_every` steps.
+collocation points; with a `resampler` (training/theta_colloc.py) the collocation theta are
+replaced every `resampler.every_steps` steps. Every term of the loss, the weights and the time
+per step go to a CSV file (and TensorBoard if enabled); checkpoints every `ckpt_every` steps.
 """
 
 import csv
@@ -20,10 +21,11 @@ from .weighting import CausalSchedule, LossWeights
 
 
 class Trainer:
-    def __init__(self, cfg, model, table, pool, run_dir, data=None):
+    def __init__(self, cfg, model, table, pool, run_dir, data=None, resampler=None):
         self.cfg = cfg
         self.model = model
         self.pool = pool
+        self.resampler = resampler
         self.run_dir = run_dir
         self.dtype = tf.keras.backend.floatx()
         self.rng = np.random.default_rng(int(cfg["runtime"]["seed"]) + 1)
@@ -179,6 +181,8 @@ class Trainer:
                 self.weights.update(stats)
             if rc["enabled"] and step % int(rc["every"]) == 0 and step < self.steps:
                 rar_info = self.rar()
+            if self.resampler is not None and step % self.resampler.every_steps == 0 and step < self.steps:
+                self.resampler.resample()
             if step % int(lc["every"]) == 0 or step == self.steps:
                 w_min_v = float(w_min)
                 self.causal.update(w_min_v)
@@ -194,6 +198,8 @@ class Trainer:
                 row.update({"lambda_" + k: v for k, v in self.weights.as_dict().items()})
                 row.update(causal_eps=float(self.causal.eps.numpy()), causal_w_min=w_min_v, pool_size=self.pool.size,
                            rar_mean_resid=rar_info[0], rar_added_resid=rar_info[1])
+                if self.resampler is not None:
+                    row["theta_resamples"] = self.resampler.n_resamples
                 if writer is None:
                     writer = csv.DictWriter(log_file, fieldnames=list(row.keys()))
                     writer.writeheader()

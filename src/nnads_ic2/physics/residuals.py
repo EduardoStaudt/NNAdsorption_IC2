@@ -40,9 +40,21 @@ def case_arrays(p, s, groups):
     return d
 
 
-def stack_cases(cases, dtype):
-    """List of `case_arrays` dicts -> dict of constant tensors [n_cases, k]."""
-    return {k: tf.constant(np.stack([c[k] for c in cases]), dtype=dtype) for k in cases[0]}
+def stack_arrays(cases):
+    """List of `case_arrays` dicts -> dict of numpy arrays [n_cases, k]."""
+    return {k: np.stack([c[k] for c in cases]) for k in cases[0]}
+
+
+def stack_cases(cases, dtype, variable=False):
+    """List of `case_arrays` dicts -> dict of tensors [n_cases, k].
+
+    variable=True gives tf.Variables, so the rows can be replaced during training (new
+    collocation theta) without retracing the compiled training step.
+    """
+    arrays = stack_arrays(cases)
+    if variable:
+        return {k: tf.Variable(v, dtype=dtype, trainable=False, name="case_" + k) for k, v in arrays.items()}
+    return {k: tf.constant(v, dtype=dtype) for k, v in arrays.items()}
 
 
 def gather_cases(table, case_idx):

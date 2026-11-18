@@ -1,8 +1,16 @@
-# Phase 2, stage (c): all 31 theta columns vary (whole IC1 domain).
+# Phase 2, stage (c): all 31 theta columns vary (whole IC1 domain). Training cases (data for the
+# hybrid, fixed collocation theta for both runs): the 50 training cases of Phase 1.
 inherit: phase2_base.yaml
 
 domain:
   mode: full
+
+data:
+  path: data/provisorio_MOL_n2_60cases.h5
+
+phase2:
+  train_data: dataset
+  n_time_per_case: 200    # as in Phase 1
 
 logging:
   run_name: phase2c

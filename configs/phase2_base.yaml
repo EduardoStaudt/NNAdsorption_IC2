@@ -1,6 +1,21 @@
 # Phase 2: parametric PINN with collocation at theta drawn from the domain (no solver needed for
 # the residuals), dimension curriculum (stages a, b, c). Stage files set `domain` and the data.
+# Physics-only runs: --set loss.weights.data=0 (hybrid: outlet data, lambda_data capped at 10).
 inherit: pinn_parametric.yaml
+
+theta_colloc:             # training/theta_colloc.py
+  n_theta: 2048           # Sobol theta from the domain per draw (besides the training cases)
+  points_per_theta: 512   # initial (z~, t~) points per theta on average: a pool of ~1M points
+  resample_every_epochs: 10   # new theta every 10 passes over the pool (~2600 steps)
+  seed: 1
+  scaler_n_theta: 8192    # Sobol theta used to fit the theta normalization (fixed for the run)
+
+phase2:
+  train_data: base_case   # base_case: MOL reference of domain.base_case (Phase 0) | dataset: Phase 1 training split of data.path
+  val_data: null          # MOL validation set of the stage (h5), or --val
+  n_time_per_case: 801    # outlet points per training case used as data (base case: all of them)
+  data_seed: 0
+  n_plots: 6
 
 train:
   steps: 50000

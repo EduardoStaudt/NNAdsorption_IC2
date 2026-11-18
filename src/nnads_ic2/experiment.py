@@ -12,23 +12,33 @@ from .physics.residuals import case_arrays, stack_cases
 from .physics.scales import compute_scales, dT_ratio_from_data, dimensionless_groups
 
 
-def case_table(cases, cfg, dtype, scaler=None):
-    """Scales, groups and the stacked constant table of a list of CaseParams.
+def fit_theta_scaler(cases, cfg):
+    """log + z-score normalization of theta, fitted on these cases."""
+    mask = theta_log_mask(cases[0].n_comp, cfg["theta"]["log_params"])
+    return ThetaScaler.fit(np.stack([p.to_theta() for p in cases]), mask, float(cfg["theta"]["sd_floor"]))
 
-    theta is normalized with `scaler` (fitted on these cases when None).
-    """
+
+def case_rows(cases, cfg, scaler):
+    """Per-case constant arrays (residual groups + normalized theta), scales and groups."""
     scales = [compute_scales(p, **cfg["scales"]) for p in cases]
     groups = [dimensionless_groups(p, s) for p, s in zip(cases, scales)]
-    Theta = np.stack([p.to_theta() for p in cases])
-    if scaler is None:
-        mask = theta_log_mask(cases[0].n_comp, cfg["theta"]["log_params"])
-        scaler = ThetaScaler.fit(Theta, mask, float(cfg["theta"]["sd_floor"]))
-    Theta_hat = scaler.transform(Theta)
+    Theta_hat = scaler.transform(np.stack([p.to_theta() for p in cases]))
     rows = []
     for p, s, g, th in zip(cases, scales, groups, Theta_hat):
         a = case_arrays(p, s, g)
         a["theta"] = th
         rows.append(a)
+    return rows, scales, groups
+
+
+def case_table(cases, cfg, dtype, scaler=None):
+    """Scales, groups and the stacked constant table of a list of CaseParams.
+
+    theta is normalized with `scaler` (fitted on these cases when None).
+    """
+    if scaler is None:
+        scaler = fit_theta_scaler(cases, cfg)
+    rows, scales, groups = case_rows(cases, cfg, scaler)
     return stack_cases(rows, dtype), scales, groups, scaler
 
 

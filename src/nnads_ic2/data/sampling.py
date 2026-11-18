@@ -22,6 +22,7 @@ class CollocationPool:
     def __init__(self, n_init, n_cases, t_final, max_size, seed):
         self.rng = np.random.default_rng(seed)
         u = sobol_unit(n_init, 2, seed)
+        self.n_init = int(n_init)
         self.n_cases = int(n_cases)
         self.t_final = float(t_final)
         self.max_size = int(max_size)
@@ -62,6 +63,16 @@ class CollocationPool:
             keep = np.ones(self.size, dtype=bool)
             keep[drop] = False
             self.z, self.t, self.case, self.from_rar = self.z[keep], self.t[keep], self.case[keep], self.from_rar[keep]
+
+
+    def renew(self, seed, keep):
+        """New quasi-random initial points (new Sobol scramble, random case for each), plus the
+        current points where `keep` is True (e.g. RAR points of cases whose theta did not change)."""
+        u = sobol_unit(self.n_init, 2, seed)
+        self.z = np.concatenate([u[:, 0], self.z[keep]])
+        self.t = np.concatenate([u[:, 1] * self.t_final, self.t[keep]])
+        self.case = np.concatenate([self.rng.integers(0, self.n_cases, self.n_init), self.case[keep]])
+        self.from_rar = np.concatenate([np.zeros(self.n_init, dtype=bool), self.from_rar[keep]])
 
 
 def select_largest(values, n):
