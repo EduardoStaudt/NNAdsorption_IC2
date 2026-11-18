@@ -146,6 +146,59 @@ class PINN(tf.keras.Model):
         raise NotImplementedError("XPINN interface loss is a later step")
 
 
+class MarchingWindow(tf.keras.Model):
+    """One window of time marching (Phase 3): the PINN from t~ = t_start on, started exactly from
+    the state the previous window (frozen) reaches at t_start.
+
+    With s = 1 - exp(-(t~ - t_start)/delta) and the previous window's state c_p, q_p, T_p, v_p at
+    (z~, t_start, theta), the new network `net` only adds what changes after t_start:
+        c~ = (1 - s) c_p + s softplus(N_c)      q~ = (1 - s) q_p + s softplus(N_q)
+        T~ = (1 - s) T_p + s N_T                v~ = (1 - s) v_p + s (1 + z~ N_v)
+    so c~, q~ >= 0 and v = v_s at the inlet stay exact. Before t_start (s clipped at 0) it returns
+    the state at t_start. `prev` is a PINN (first window) or another MarchingWindow.
+    """
+
+    def __init__(self, prev, net, t_start, **kwargs):
+        super().__init__(**kwargs)
+        self.prev = prev
+        self.prev.trainable = False  # earlier windows are fixed: only `net` trains
+        self.net = net
+        self.t_start = float(t_start)
+        self.delta = float(net.delta)
+
+    def call(self, inputs):
+        z, t = inputs["z"], inputs["t"]
+        p = self.prev(dict(inputs, t=tf.zeros_like(t) + self.t_start))  # state at t_start, no t-dependence
+        N_c, N_q, N_T, N_v = self.net.subnets[0](z, t, inputs["theta"])
+        s = 1.0 - tf.exp(-tf.maximum(t - self.t_start, 0.0) / self.delta)
+        return dict(
+            c=(1.0 - s) * p["c"] + s * tf.nn.softplus(N_c),
+            q=(1.0 - s) * p["q"] + s * tf.nn.softplus(N_q),
+            T=(1.0 - s) * p["T"] + s * N_T,
+            v=(1.0 - s) * p["v"] + s * (1.0 + z * N_v),
+        )
+
+
+class MarchedPINN(tf.keras.Model):
+    """The windows of time marching as one model: each point is answered by the window holding its
+    t~ (window k covers [t_starts[k], t_starts[k+1])). For evaluation; training uses each window."""
+
+    def __init__(self, windows, t_starts, **kwargs):
+        super().__init__(**kwargs)
+        if len(windows) != len(t_starts):
+            raise ValueError("one start time per window")
+        self.windows = list(windows)
+        self.t_starts = [float(x) for x in t_starts]
+
+    def call(self, inputs):
+        t = inputs["t"]
+        out = self.windows[0](inputs)
+        for window, t0 in zip(self.windows[1:], self.t_starts[1:]):
+            later = window(inputs)
+            out = {k: tf.where(t >= t0, later[k], out[k]) for k in out}
+        return out
+
+
 def outputs_as_matrix(out):
     """dict c, q, T, v -> [B, 2n+2] in the order c_0..c_{n-1}, q_0..q_{n-1}, T, v."""
     return tf.concat([out["c"], out["q"], out["T"], out["v"]], axis=-1)

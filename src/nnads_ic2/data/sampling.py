@@ -19,21 +19,29 @@ def sobol_unit(n, dim, seed):
 
 
 class CollocationPool:
-    def __init__(self, n_init, n_cases, t_final, max_size, seed):
+    """Interior collocation points (z~, t~, case) with t~ in [t_start, t_final] (t_start > 0: one
+    window of time marching)."""
+
+    def __init__(self, n_init, n_cases, t_final, max_size, seed, t_start=0.0):
         self.rng = np.random.default_rng(seed)
         u = sobol_unit(n_init, 2, seed)
         self.n_init = int(n_init)
         self.n_cases = int(n_cases)
+        self.t_start = float(t_start)
         self.t_final = float(t_final)
         self.max_size = int(max_size)
         self.z = u[:, 0]
-        self.t = u[:, 1] * self.t_final
+        self.t = self._times(u[:, 1])
         self.case = self.rng.integers(0, self.n_cases, n_init)
         self.from_rar = np.zeros(n_init, dtype=bool)
 
     @property
     def size(self):
         return self.z.size
+
+    def _times(self, u):
+        """[0, 1) -> [t_start, t_final)."""
+        return self.t_start + u * (self.t_final - self.t_start)
 
     def sample(self, n):
         """Random mini-batch of interior points (with replacement)."""
@@ -44,7 +52,7 @@ class CollocationPool:
         """Fresh uniform random points to be screened by RAR."""
         return (
             self.rng.uniform(0.0, 1.0, n),
-            self.rng.uniform(0.0, self.t_final, n),
+            self.rng.uniform(self.t_start, self.t_final, n),
             self.rng.integers(0, self.n_cases, n),
         )
 
@@ -75,7 +83,7 @@ class CollocationPool:
         current points where `keep` is True (e.g. RAR points of cases whose theta did not change)."""
         u = sobol_unit(self.n_init, 2, seed)
         self.z = np.concatenate([u[:, 0], self.z[keep]])
-        self.t = np.concatenate([u[:, 1] * self.t_final, self.t[keep]])
+        self.t = np.concatenate([self._times(u[:, 1]), self.t[keep]])
         self.case = np.concatenate([self.rng.integers(0, self.n_cases, self.n_init), self.case[keep]])
         self.from_rar = np.concatenate([np.zeros(self.n_init, dtype=bool), self.from_rar[keep]])
 
@@ -86,9 +94,9 @@ def select_largest(values, n):
     return np.argpartition(-values, n - 1)[:n]
 
 
-def boundary_points(rng, n, z_value, t_final, n_cases):
-    """n points on the line z~ = z_value (0: inlet, 1: outlet), uniform in time."""
-    return np.full(n, float(z_value)), rng.uniform(0.0, t_final, n), rng.integers(0, n_cases, n)
+def boundary_points(rng, n, z_value, t_final, n_cases, t_start=0.0):
+    """n points on the line z~ = z_value (0: inlet, 1: outlet), uniform in time over [t_start, t_final]."""
+    return np.full(n, float(z_value)), rng.uniform(t_start, t_final, n), rng.integers(0, n_cases, n)
 
 
 def initial_points(rng, n, n_cases):

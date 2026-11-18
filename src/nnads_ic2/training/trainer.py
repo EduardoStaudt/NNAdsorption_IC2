@@ -43,7 +43,10 @@ class Trainer:
         )
         self.weights = LossWeights(cfg["loss"], self.dtype)
         self.causal = CausalSchedule(cfg["loss"]["causal"], self.dtype)
-        self.losses = LossBuilder(model, table, cfg["loss"], cfg["physics"]["isotherm_p_min_atm"])
+        # a pool covering only part of [0, t~_F] is one window of time marching: causal slices over it
+        partial = pool.t_start > 0 or pool.t_final < float(cfg["scales"]["t_final_factor"])
+        window = (pool.t_start, pool.t_final) if partial else None
+        self.losses = LossBuilder(model, table, cfg["loss"], cfg["physics"]["isotherm_p_min_atm"], t_window=window)
         self.data = {k: v for k, v in (data or {}).items() if v is not None}
         self.use_data = bool(self.data) and float(cfg["loss"]["weights"]["data"]) > 0
         self.use_ic = (not cfg["model"]["hard_ic"]) and float(cfg["loss"]["weights"]["ic"]) > 0
@@ -74,9 +77,9 @@ class Trainer:
         n_int = n_interior or self.sizes["interior"]
         z, t, case = self.pool.sample(n_int)
         b = dict(z=self._col(z), t=self._col(t), case=self._idx(case))
-        nb, tf_, nc = self.sizes["boundary"], self.pool.t_final, self.pool.n_cases
-        zi, ti, ci = boundary_points(self.rng, nb, 0.0, tf_, nc)
-        zo, to, co = boundary_points(self.rng, nb, 1.0, tf_, nc)
+        nb, t0, t1, nc = self.sizes["boundary"], self.pool.t_start, self.pool.t_final, self.pool.n_cases
+        zi, ti, ci = boundary_points(self.rng, nb, 0.0, t1, nc, t_start=t0)
+        zo, to, co = boundary_points(self.rng, nb, 1.0, t1, nc, t_start=t0)
         b.update(z_in=self._col(zi), t_in=self._col(ti), case_in=self._idx(ci))
         b.update(z_out=self._col(zo), t_out=self._col(to), case_out=self._idx(co))
         if self.use_ic:

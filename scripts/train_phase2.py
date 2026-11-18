@@ -18,9 +18,14 @@ training cases are evaluated too (eval_train/: fit, not generalization). With
 phase2.eval_every > 0 the outlet metrics on the validation cases are also computed during
 training (val_curve.csv; per-case files in eval_curve/step_<k>/); that time is not counted in
 the GPU hours of training.
+Time marching (Phase 3 proof of concept, physics only): phase2.march_windows = K > 0 cuts
+[0, t~_F] into K equal windows trained one after the other, steps/K steps each; window k starts
+from the state of window k-1 at its start (models/pinn.py: MarchingWindow) and its network from
+the weights of window k-1. Per-window logs and checkpoints in window_<k>/.
 """
 
 import argparse
+import copy
 import csv
 import json
 import os
@@ -39,6 +44,7 @@ from nnads_ic2.eval.report import evaluate_cases, flat_metrics, solution_fields 
 from nnads_ic2.experiment import (  # noqa: E402
     case_table, fit_theta_scaler, make_model, outlet_data, pretrained_setup, reference_solution, resolve_dT_ratio,
 )
+from nnads_ic2.models.pinn import MarchedPINN, MarchingWindow  # noqa: E402
 from nnads_ic2.physics.scales import compute_scales, measured_temperature_rise  # noqa: E402
 from nnads_ic2.training.theta_colloc import ThetaCollocation  # noqa: E402
 from nnads_ic2.training.trainer import Trainer  # noqa: E402
@@ -94,6 +100,43 @@ def median_ms_per_step(log_path):
     with open(log_path, encoding="utf-8") as f:
         ms = [float(r["ms_per_step"]) for r in csv.DictReader(f)][1:]  # first row includes tracing
     return float(np.median(ms)) if ms else float("nan")
+
+
+def train_marching(cfg, n_windows, train, domain, scaler, dtype, run_dir, n_comp):
+    """Time marching: window k covers t~ in [k, k+1] t~_F/K, with its own collocation times,
+    boundary times and causal slices. Returns the windows as one model and the last window's
+    collocation and trainer."""
+    tc = cfg["theta_colloc"]
+    edges = np.linspace(0.0, float(cfg["scales"]["t_final_factor"]), n_windows + 1)
+    steps_w = int(cfg["train"]["steps"]) // n_windows
+    windows, nets, info = [], [], []
+    timing = dict(train_s=0.0)
+    for k in range(n_windows):
+        cfg_k = copy.deepcopy(cfg)
+        cfg_k["train"]["steps"] = steps_w
+        cfg_k["logging"]["ckpt_every"] = min(int(cfg["logging"]["ckpt_every"]), steps_w)
+        colloc = ThetaCollocation(cfg_k, train["params"], ThetaSampler(domain, seed=int(tc["seed"])), scaler, dtype,
+                                  steps_w, t_range=(edges[k], edges[k + 1]))
+        net = make_model(cfg_k, n_comp)
+        if k == 0:
+            model = net  # the plain PINN: hard initial condition at t~ = 0
+        else:
+            net.set_weights(nets[-1].get_weights())  # warm start from the previous window's network
+            model = MarchingWindow(windows[-1], net, edges[k])
+        nets.append(net)
+        windows.append(model)
+        win_dir = os.path.join(run_dir, "window_%d" % k)
+        os.makedirs(win_dir, exist_ok=True)
+        print("window %d: t~ in [%.3f, %.3f], %d steps" % (k, edges[k], edges[k + 1], steps_w), flush=True)
+        trainer = Trainer(cfg_k, model, colloc.table, colloc.pool, win_dir, resampler=colloc)
+        t = trainer.run()
+        timing["train_s"] += t["train_s"]
+        timing.setdefault("first_step_s", t.get("first_step_s"))
+        info.append(dict(window=k, t_start=float(edges[k]), t_end=float(edges[k + 1]), steps=steps_w,
+                         train_s=t["train_s"], median_ms_per_step=median_ms_per_step(os.path.join(win_dir, "train_log.csv")),
+                         skipped_steps=int(trainer.skipped.numpy())))
+    n_params = len(nets) * int(sum(v.numpy().size for v in nets[-1].trainable_variables))
+    return MarchedPINN(windows, edges[:-1]), colloc, trainer, timing, dict(n_windows=n_windows, n_params=n_params, windows=info)
 
 
 def main():
@@ -160,6 +203,10 @@ def main():
     val = dict(params=[domain.snap(c.params) for c in val_cases], refs=[dataset_reference(c) for c in val_cases],
                fields=[c.profiles for c in val_cases], seeds=[c.seed for c in val_cases])
 
+    n_windows = int(cfg["phase2"].get("march_windows") or 0)
+    eval_every = int(cfg["phase2"].get("eval_every") or 0)
+    if n_windows > 0 and (hybrid or init_dir or eval_every > 0):
+        sys.exit("phase2.march_windows (time marching) is a physics-only proof of concept: no data, init_from or eval_every")
     model = make_model(cfg, n_comp)
     if init_dir:
         model.load_weights(os.path.join(init_dir, "model.weights.h5"))
@@ -178,10 +225,13 @@ def main():
             w.writerow(row)
         print("validation at step %d: y R2 %.3f | T_out RMSE %.2f K" % (step, row["y_c1_r2"], row["T_out_rmse"]), flush=True)
 
-    eval_every = int(cfg["phase2"].get("eval_every") or 0)
-    trainer = Trainer(cfg, model, colloc.table, colloc.pool, run_dir, data=data, resampler=colloc,
-                      evaluator=periodic_eval if eval_every > 0 else None, eval_every=eval_every)
-    timing = trainer.run()
+    march = None
+    if n_windows > 0:
+        model, colloc, trainer, timing, march = train_marching(cfg, n_windows, train, domain, scaler, dtype, run_dir, n_comp)
+    else:
+        trainer = Trainer(cfg, model, colloc.table, colloc.pool, run_dir, data=data, resampler=colloc,
+                          evaluator=periodic_eval if eval_every > 0 else None, eval_every=eval_every)
+        timing = trainer.run()
     train_s = timing["train_s"] - timing.get("periodic_eval_s", 0.0)  # training only
     n_plots = int(cfg["phase2"]["n_plots"])
     summary = dict(
@@ -197,11 +247,13 @@ def main():
         training=dict(device=runtime.device_name(), steps=steps, train_s=train_s,
                       periodic_eval_s=timing.get("periodic_eval_s", 0.0),
                       gpu_hours=train_s / 3600.0 if runtime.device_name() == "GPU" else 0.0,
-                      median_ms_per_step=median_ms_per_step(os.path.join(run_dir, "train_log.csv")),
+                      median_ms_per_step=(float(np.mean([w["median_ms_per_step"] for w in march["windows"]])) if march
+                                          else median_ms_per_step(os.path.join(run_dir, "train_log.csv"))),
                       first_step_s=timing.get("first_step_s"), jit_compile=bool(cfg["train"]["jit_compile"]),
-                      n_params=int(sum(v.numpy().size for v in model.trainable_variables)),
+                      n_params=march["n_params"] if march else int(sum(v.numpy().size for v in model.trainable_variables)),
                       final_lambdas=trainer.weights.as_dict(), final_causal_eps=float(trainer.causal.eps.numpy()),
                       pool_size=colloc.pool.size),
+        march=march,
     )
     if train["extra"] is not None:  # whole domain: also the Phase 1 validation seeds (comparison with Phase 1)
         summary["phase1_validation"] = evaluate_set(model, cfg, scaler, dtype, train["extra"],

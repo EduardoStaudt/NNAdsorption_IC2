@@ -30,7 +30,8 @@ from ..physics.residuals import stack_arrays, stack_cases
 
 
 class ThetaCollocation:
-    def __init__(self, cfg, fixed_cases, sampler, scaler, dtype, steps):
+    def __init__(self, cfg, fixed_cases, sampler, scaler, dtype, steps, t_range=None):
+        """t_range: (t_start, t_end) of the collocation times (one time-marching window); None: [0, t~_F]."""
         tc = cfg["theta_colloc"]
         self.cfg = cfg
         self.sampler = sampler
@@ -46,7 +47,8 @@ class ThetaCollocation:
         n_init = n_rows * int(tc["points_per_theta"])
         rar = cfg["sampling"]["rar"]
         n_rar = int(rar["n_add"]) * (int(steps) // int(rar["every"]) + 1) if rar["enabled"] else 0
-        self.pool = CollocationPool(n_init, n_rows, float(cfg["scales"]["t_final_factor"]), n_init + n_rar, self.seed)
+        t0, t1 = t_range if t_range is not None else (0.0, float(cfg["scales"]["t_final_factor"]))
+        self.pool = CollocationPool(n_init, n_rows, t1, n_init + n_rar, self.seed, t_start=t0)
         epoch = n_init / int(cfg["sampling"]["n_interior"])  # steps per pass over the pool
         every = float(tc["resample_every_epochs"] or 0)
         self.every_steps = max(1, int(round(every * epoch))) if every > 0 else 0  # 0: never renewed
@@ -80,7 +82,7 @@ class ThetaCollocation:
         m = k * self.front_candidates
         rng = np.random.default_rng(self.seed + 7919 * (self.n_resamples + 1))
         z = rng.uniform(0.0, 1.0, (n_rows, m))
-        t = rng.uniform(0.0, self.pool.t_final, (n_rows, m))
+        t = rng.uniform(self.pool.t_start, self.pool.t_final, (n_rows, m))
         case = np.repeat(np.arange(n_rows), m).reshape(n_rows, m)
         w = np.asarray(weight_fn(z.ravel(), t.ravel(), case.ravel()), dtype=float).reshape(n_rows, m)
         w = np.where(np.isfinite(w), w, 0.0)

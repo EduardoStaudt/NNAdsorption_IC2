@@ -1,0 +1,15 @@
+# Phase 3, item 4: time marching on stage (b) as a proof of concept. The stage (b) physics run of
+# Phase 2 (2048 Sobol theta renewed every 10 epochs, plain mean squares, 50 000 steps) with
+# [0, t~_F] cut into 4 windows of 12 500 steps each; window k starts from the state window k-1
+# reaches at its start (hard constraint) and from its network weights.
+inherit: phase2_stage_b.yaml
+
+phase2:
+  march_windows: 4
+
+loss:
+  weights:
+    data: 0.0
+
+logging:
+  run_name: phase3b_march

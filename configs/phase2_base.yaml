@@ -20,6 +20,7 @@ phase2:
   n_plots: 6
   eval_every: 0           # > 0: outlet metrics on the validation set every so many steps (val_curve.csv)
   init_from: null         # trained run directory to start from (fine-tuning: its weights, network, dT_ratio, theta scaler)
+  march_windows: 0        # > 0: time marching over this many equal windows of t~ (physics only, Phase 3 proof of concept)
 
 train:
   steps: 50000

@@ -67,14 +67,14 @@ def compute_boundary_fields(model, z, t, g):
     return fields
 
 
-def causal_weights(t, t_final, r2, n_bins, eps):
+def causal_weights(t, t_final, r2, n_bins, eps, t_start=0.0):
     """Causal training (Wang, Sankaran & Perdikaris, 2022).
 
-    Time is cut into n_bins slices. Slice j gets weight w_j = exp(-eps * sum_{k<j} L_k), where
-    L_k is the mean residual of slice k: later times only count once the earlier ones are solved,
-    as in a time-marching solver. Weights carry no gradient.
+    Time [t_start, t_final] is cut into n_bins slices. Slice j gets weight
+    w_j = exp(-eps * sum_{k<j} L_k), where L_k is the mean residual of slice k: later times only
+    count once the earlier ones are solved, as in a time-marching solver. Weights carry no gradient.
     """
-    bins = tf.cast(tf.floor(t[:, 0] / t_final[:, 0] * n_bins), tf.int32)
+    bins = tf.cast(tf.floor((t[:, 0] - t_start) / (t_final[:, 0] - t_start) * n_bins), tf.int32)
     bins = tf.clip_by_value(bins, 0, n_bins - 1)
     L = tf.math.unsorted_segment_mean(r2, bins, n_bins)
     w_bins = tf.stop_gradient(tf.exp(-eps * tf.cumsum(L, exclusive=True)))
@@ -82,8 +82,11 @@ def causal_weights(t, t_final, r2, n_bins, eps):
 
 
 class LossBuilder:
-    def __init__(self, model, table, loss_cfg, p_min):
+    def __init__(self, model, table, loss_cfg, p_min, t_window=None):
         self.model = model
+        # time range of the causal slices: (t_start, t_end) of a time-marching window, or None for
+        # [0, t~_F] of each case
+        self.t_window = None if t_window is None else (float(t_window[0]), float(t_window[1]))
         self.table = table  # case constants, [n_cases, k] tensors (includes normalized theta)
         self.pde_w = {k: float(loss_cfg["pde_terms"][k]) for k in PDE_TERMS}
         self.causal_on = bool(loss_cfg["causal"]["enabled"])
@@ -116,7 +119,12 @@ class LossBuilder:
         else:
             r_w, causal_input = tf.ones_like(total), total
         if self.causal_on:
-            w, w_bins = causal_weights(t, g["t_final"], causal_input, self.n_bins, eps)
+            if self.t_window is None:
+                w, w_bins = causal_weights(t, g["t_final"], causal_input, self.n_bins, eps)
+            else:
+                t0, t1 = self.t_window
+                w, w_bins = causal_weights(t, tf.fill(tf.shape(t), tf.cast(t1, t.dtype)), causal_input,
+                                           self.n_bins, eps, t_start=t0)
         else:
             w, w_bins = tf.ones_like(total), tf.ones((self.n_bins,), total.dtype)
         terms = {k: tf.reduce_mean(w * r_w * r2[k]) for k in PDE_TERMS}
