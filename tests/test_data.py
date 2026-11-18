@@ -1,5 +1,8 @@
 import os
+import subprocess
+import sys
 
+import h5py
 import numpy as np
 import pytest
 
@@ -7,7 +10,7 @@ from conftest import IC1_ROOT, REPO_ROOT
 from ic1_reference import X_RANGES, load_ic1_module, sample_cfg_22, vetor_X_v3
 from nnads_ic2.config import load_config
 from nnads_ic2.data.cases import prefilter, sample_case_ic1, sample_cases, severity_ic1
-from nnads_ic2.data.loader import load_recorder_h5, write_recorder_h5
+from nnads_ic2.data.loader import dataset_info, load_recorder_h5, write_recorder_h5
 from nnads_ic2.data.sampling import CollocationPool, select_largest
 
 CFG = load_config(os.path.join(REPO_ROOT, "configs", "pinn_base.yaml"))
@@ -77,6 +80,36 @@ def test_recorder_h5_round_trip(tmp_path, profiles):
         assert (case.profiles is not None) == profiles
         if profiles:
             assert case.profiles["c"].shape == (41, 2, 11)
+
+
+def test_dataset_tag_and_solver_statistics_are_stored(tmp_path):
+    rng = np.random.default_rng(1)
+    items = [(s, p, fake_solution(p, 21, 11, rng)) for s, p in sample_cases(range(30), CASES)[:2]]
+    path = os.path.join(tmp_path, "provisorio_MOL_test.h5")
+    write_recorder_h5(path, items, attrs=dict(dataset_tag="provisório_MOL", solver_cfg='{"nx": 11}'),
+                      row_data=dict(solve_wall_s=[1.5, 2.5]))
+    info = dataset_info(path)
+    assert info["dataset_tag"] == "provisório_MOL"
+    assert info["source"] == "MOL reference solver"
+    assert info["n_rows"] == 2 and info["n_valid"] == 2
+    with h5py.File(path, "r") as f:
+        np.testing.assert_allclose(f["solve_info/solve_wall_s"][:], [1.5, 2.5])
+    assert len(load_recorder_h5(path, n_comp=2)) == 2  # extra groups do not disturb the loader
+
+
+def test_mol_dataset_script_tags_the_file_and_logs_the_cost(tmp_path):
+    out = os.path.join(tmp_path, "provisorio_MOL_tiny.h5")
+    cmd = [sys.executable, os.path.join(REPO_ROOT, "scripts", "make_mol_dataset.py"), "--n-cases", "2", "--workers", "2",
+           "--out", out, "--set", "solver.nx=21", "solver.n_out=41"]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+    info = dataset_info(out)
+    assert info["dataset_tag"] == "provisório_MOL" and "NOT the v23b" in info["source"]
+    assert info["n_valid"] == 2
+    cases = load_recorder_h5(out, n_comp=2, use_internal_profiles=True)
+    assert [c.seed for c in cases] == sorted(c.seed for c in cases)
+    assert cases[0].profiles["T"].shape == (11, 21)  # 41 output times, every 4th kept
+    with open(os.path.splitext(out)[0] + ".cost.csv", encoding="utf-8") as f:
+        assert f.readline().startswith("seed,tst_max_s,severity,t_final_s,wall_s")
 
 
 def test_rar_pool_keeps_its_size_and_the_new_points():

@@ -15,7 +15,9 @@ use nodes.
 IC2 extensions (optional; the v23b format is not known yet):
     v_out  [N]      variable-length outlet velocity [m/s]
     profiles/<row>/{t, c, q, T, v}   internal fields at a few times (z grid in attribute `z`)
-`use_internal_profiles=True` reads them when present.
+    solve_info/<name> [N]            per-row solver statistics (e.g. wall time per seed)
+    file attributes, e.g. `dataset_tag` ("provisório_MOL": MOL data, not v23b) and `source`
+`use_internal_profiles=True` reads the profiles when present; `dataset_info` reads the attributes.
 """
 
 from dataclasses import dataclass
@@ -48,14 +50,28 @@ def _axial_grid(L, nx, grid):
     return np.arange(nx) * L / (nx - 1)
 
 
+def _text(v):
+    return v.decode() if isinstance(v, bytes) else v
+
+
+def dataset_info(path):
+    """File attributes of a dataset (tag, source, solver settings...) plus its row counts."""
+    with h5py.File(path, "r") as f:
+        info = {k: _text(v) for k, v in f.attrs.items()}
+        info = {k: (v.tolist() if isinstance(v, np.ndarray) else v.item() if isinstance(v, np.generic) else v)
+                for k, v in info.items()}
+        n = f["X_v2"].shape[0]
+        info["n_rows"] = int(n)
+        info["n_valid"] = int(np.sum(f["valid"][:])) if "valid" in f else int(n)
+    return info
+
+
 def load_recorder_h5(path, n_comp, carrier=0, use_internal_profiles=False, valid_only=True, rows=None):
     """Read the cases of a recorder-format h5 file into a list of SolverCase."""
     out = []
     with h5py.File(path, "r") as f:
         N = f["X_v2"].shape[0]
-        grid = f.attrs.get("grid", "nodes")
-        if isinstance(grid, bytes):
-            grid = grid.decode()
+        grid = _text(f.attrs.get("grid", "nodes"))
         rows = np.arange(N) if rows is None else np.asarray(rows)
         valid = f["valid"][:] if "valid" in f else np.ones(N, dtype=np.int8)
         for r in rows:
@@ -92,12 +108,14 @@ def load_recorder_h5(path, n_comp, carrier=0, use_internal_profiles=False, valid
     return out
 
 
-def write_recorder_h5(path, items, write_profiles=False, profile_stride=1):
+def write_recorder_h5(path, items, write_profiles=False, profile_stride=1, attrs=None, row_data=None):
     """Write solutions in the recorder format (+ v_out and, optionally, internal profiles).
 
     items: list of (seed, CaseParams, sol) with `sol` as returned by physics/mol_solver.py.
     The MOL solver saves its initial state too, so the first sample is dropped and the series
     follow the recorder convention t_k = (k + 1) TF / NT.
+    attrs: extra file attributes (dataset tag, solver settings...); row_data: {name: [N] values}
+    written to solve_info/<name>.
     """
     N = len(items)
     n = items[0][1].n_comp
@@ -105,6 +123,11 @@ def write_recorder_h5(path, items, write_profiles=False, profile_stride=1):
     vlf = h5py.special_dtype(vlen=np.float32)
     with h5py.File(path, "w") as f:
         f.attrs.update(dict(config="%dcomp_1layer" % n, nmax=n, NX=nx, grid="cells", source="MOL reference solver"))
+        f.attrs.update(attrs or {})
+        if row_data:
+            g = f.create_group("solve_info")
+            for name, values in row_data.items():
+                g.create_dataset(name, data=np.asarray(values))
         X = f.create_dataset("X_v2", (N, items[0][1].to_theta().size), dtype=np.float32)
         dsc = f.create_dataset("c_out", (N, n), dtype=vlf)
         dsy = f.create_dataset("y_out", (N, n), dtype=vlf)
