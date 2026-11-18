@@ -8,7 +8,7 @@ import tensorflow as tf
 from conftest import REPO_ROOT
 from nnads_ic2.config import load_config
 from nnads_ic2.data.cases import sample_cases
-from nnads_ic2.eval.report import evaluate_cases
+from nnads_ic2.eval.report import evaluate_cases, flat_metrics
 from nnads_ic2.experiment import case_table, make_model
 from nnads_ic2.physics.scales import compute_scales, feed_and_initial_state
 
@@ -62,6 +62,10 @@ def test_evaluate_cases_reports_every_phase0_metric(tmp_path):
         assert len(list(csv.DictReader(f))) == 2
     assert os.path.exists(os.path.join(tmp_path, "fields_case000.png"))
     assert not os.path.exists(os.path.join(tmp_path, "fields_case001.png"))  # only n_plots figures
+    row = flat_metrics(res)  # one row of the validation curve (train_phase2.py)
+    assert row["y_c1_r2"] == res["outlet"]["y_c1"]["r2"] and row["T_out_rmse"] == res["outlet"]["T_out"]["rmse"]
+    assert row["t50_c1_rel_err_pct"] == per_case["t50_c1_rel_err_pct"]
+    assert not any(k.startswith(("moment", "field", "rmse_")) for k in row)
 
 
 def test_evaluate_cases_without_velocity_data(tmp_path):

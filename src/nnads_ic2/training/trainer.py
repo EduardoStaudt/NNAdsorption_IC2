@@ -6,6 +6,8 @@ batch. Each step draws interior, inlet, outlet (and, if used, initial/data) poin
 collocation points; with a `resampler` (training/theta_colloc.py) the collocation theta are
 replaced every `resampler.every_steps` steps. Every term of the loss, the weights and the time
 per step go to a CSV file (and TensorBoard if enabled); checkpoints every `ckpt_every` steps.
+An optional `evaluator(step)` runs every `eval_every` steps (validation curve); its time is kept
+out of the logged ms/step and reported apart (timing["periodic_eval_s"]).
 """
 
 import csv
@@ -21,11 +23,13 @@ from .weighting import CausalSchedule, LossWeights
 
 
 class Trainer:
-    def __init__(self, cfg, model, table, pool, run_dir, data=None, resampler=None):
+    def __init__(self, cfg, model, table, pool, run_dir, data=None, resampler=None, evaluator=None, eval_every=0):
         self.cfg = cfg
         self.model = model
         self.pool = pool
         self.resampler = resampler
+        self.evaluator = evaluator
+        self.eval_every = int(eval_every or 0)
         self.run_dir = run_dir
         self.dtype = tf.keras.backend.floatx()
         self.rng = np.random.default_rng(int(cfg["runtime"]["seed"]) + 1)
@@ -230,6 +234,12 @@ class Trainer:
             if step % int(lc["ckpt_every"]) == 0:
                 self.step_var.assign(step)
                 self.ckpt_mgr.save()
+            if self.evaluator is not None and self.eval_every > 0 and step % self.eval_every == 0:
+                t0 = time.time()
+                self.evaluator(step)
+                spent = time.time() - t0
+                self.timing["periodic_eval_s"] = self.timing.get("periodic_eval_s", 0.0) + spent
+                t_last += spent  # not part of the next logged ms/step
         self.timing["adam_s"] = time.time() - t_start
         log_file.close()
         if self.cfg["train"]["lbfgs"]["enabled"]:

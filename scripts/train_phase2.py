@@ -11,7 +11,10 @@ no solver data except the scalar dT_ratio of the temperature scale):
 Collocation: the training cases plus theta_colloc.n_theta Sobol theta from the domain, renewed
 every theta_colloc.resample_every_epochs passes over the pool (training/theta_colloc.py).
 Validation: every valid case of --val (MOL cases of the stage, never seen in training). The
-training cases are evaluated too (eval_train/: fit, not generalization).
+training cases are evaluated too (eval_train/: fit, not generalization). With
+phase2.eval_every > 0 the outlet metrics on the validation cases are also computed during
+training (val_curve.csv; per-case files in eval_curve/step_<k>/); that time is not counted in
+the GPU hours of training.
 """
 
 import argparse
@@ -29,7 +32,7 @@ from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
 from nnads_ic2.config import apply_overrides, load_config, resolve_path, save_config  # noqa: E402
 from nnads_ic2.data.domain import Domain, ThetaSampler  # noqa: E402
 from nnads_ic2.data.loader import dataset_info, load_recorder_h5  # noqa: E402
-from nnads_ic2.eval.report import evaluate_cases, solution_fields  # noqa: E402
+from nnads_ic2.eval.report import evaluate_cases, flat_metrics, solution_fields  # noqa: E402
 from nnads_ic2.experiment import case_table, fit_theta_scaler, make_model, outlet_data, reference_solution, resolve_dT_ratio  # noqa: E402
 from nnads_ic2.physics.scales import compute_scales, measured_temperature_rise  # noqa: E402
 from nnads_ic2.training.theta_colloc import ThetaCollocation  # noqa: E402
@@ -142,14 +145,32 @@ def main():
                                       int(cfg["phase2"]["n_time_per_case"]), rng)}
     save_config(cfg, os.path.join(run_dir, "config.yaml"))
 
-    model = make_model(cfg, n_comp)
-    trainer = Trainer(cfg, model, colloc.table, colloc.pool, run_dir, data=data, resampler=colloc)
-    timing = trainer.run()
-
     val_cases = load_recorder_h5(val_path, n_comp, carrier=int(cfg["data"]["carrier"]), use_internal_profiles=True,
                                  keys=cfg["data"].get("keys"))
     val = dict(params=[domain.snap(c.params) for c in val_cases], refs=[dataset_reference(c) for c in val_cases],
                fields=[c.profiles for c in val_cases], seeds=[c.seed for c in val_cases])
+
+    model = make_model(cfg, n_comp)
+    curve_path = os.path.join(run_dir, "val_curve.csv")
+
+    def periodic_eval(step):
+        """Outlet metrics on the validation cases at this step (no internal fields, no plots)."""
+        res = evaluate_set(model, cfg, scaler, dtype, dict(val, fields=None),
+                           os.path.join(run_dir, "eval_curve", "step_%06d" % step), 0)
+        row = dict(step=step, **flat_metrics(res))
+        new = not os.path.exists(curve_path)
+        with open(curve_path, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if new:
+                w.writeheader()
+            w.writerow(row)
+        print("validation at step %d: y R2 %.3f | T_out RMSE %.2f K" % (step, row["y_c1_r2"], row["T_out_rmse"]), flush=True)
+
+    eval_every = int(cfg["phase2"].get("eval_every") or 0)
+    trainer = Trainer(cfg, model, colloc.table, colloc.pool, run_dir, data=data, resampler=colloc,
+                      evaluator=periodic_eval if eval_every > 0 else None, eval_every=eval_every)
+    timing = trainer.run()
+    train_s = timing["train_s"] - timing.get("periodic_eval_s", 0.0)  # training only
     n_plots = int(cfg["phase2"]["n_plots"])
     summary = dict(
         mode="hybrid" if hybrid else "physics",
@@ -160,8 +181,9 @@ def main():
         train_data=dict(source=train["source"], seeds=[str(s) for s in train["seeds"]]),
         dT_ratio=float(cfg["scales"]["dT_ratio"]),
         theta_colloc=colloc.info(),
-        training=dict(device=runtime.device_name(), steps=steps, train_s=timing["train_s"],
-                      gpu_hours=timing["train_s"] / 3600.0 if runtime.device_name() == "GPU" else 0.0,
+        training=dict(device=runtime.device_name(), steps=steps, train_s=train_s,
+                      periodic_eval_s=timing.get("periodic_eval_s", 0.0),
+                      gpu_hours=train_s / 3600.0 if runtime.device_name() == "GPU" else 0.0,
                       median_ms_per_step=median_ms_per_step(os.path.join(run_dir, "train_log.csv")),
                       first_step_s=timing.get("first_step_s"), jit_compile=bool(cfg["train"]["jit_compile"]),
                       n_params=int(sum(v.numpy().size for v in model.trainable_variables)),

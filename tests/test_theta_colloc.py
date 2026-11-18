@@ -103,3 +103,16 @@ def test_trainer_skips_steps_with_a_non_finite_loss(tmp_path):
         np.testing.assert_array_equal(w.numpy(), w0)  # zero gradients from the start: Adam does not move
     with open(os.path.join(tmp_path, "train_log.csv"), encoding="utf-8") as f:
         assert "skipped_steps" in f.readline()
+
+
+def test_trainer_calls_the_evaluator_every_eval_every_steps(tmp_path):
+    tf.keras.utils.set_random_seed(0)
+    cfg = small_cfg()
+    cfg["train"]["steps"] = 6
+    cfg["sampling"]["rar"]["enabled"] = False
+    col = make_colloc(cfg, steps=6)
+    model = make_model(cfg, 2)
+    seen = []
+    trainer = Trainer(cfg, model, col.table, col.pool, str(tmp_path), evaluator=seen.append, eval_every=3)
+    timing = trainer.run()
+    assert seen == [3, 6] and timing["periodic_eval_s"] >= 0.0

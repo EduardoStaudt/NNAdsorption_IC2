@@ -129,6 +129,17 @@ def _finite_stat(values, fn):
     return float(fn(v)) if v.size else float("nan")
 
 
+def flat_metrics(res):
+    """One flat row from an `evaluate_cases` result: <series>_rmse / _r2 of the pooled outlet
+    metrics, and the mean |relative error| (%) of each characteristic time over the cases."""
+    row = {}
+    for key, m in res["outlet"].items():
+        row[key + "_rmse"] = m["rmse"]
+        row[key + "_r2"] = m["r2"]
+    row.update({k: v for k, v in res["per_case_mean_abs"].items() if k.endswith("_rel_err_pct")})
+    return row
+
+
 def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_dir, n_plots, fields=None):
     """Several cases (Phase 1 validation/holdout).
 

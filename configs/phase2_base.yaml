@@ -16,6 +16,7 @@ phase2:
   n_time_per_case: 801    # outlet points per training case used as data (base case: all of them)
   data_seed: 0
   n_plots: 6
+  eval_every: 0           # > 0: outlet metrics on the validation set every so many steps (val_curve.csv)
 
 train:
   steps: 50000
