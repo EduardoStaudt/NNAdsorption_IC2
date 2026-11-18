@@ -1,0 +1,55 @@
+"""TensorFlow runtime setup. Import this module BEFORE tensorflow is imported anywhere.
+
+Two machine-specific fixes live here:
+- XLA compiles GPU code with `ptxas`. On WSL2 the system ptxas (CUDA 12.3) does not know
+  the RTX 50xx (compute capability 12.0), so we point XLA to the newer ptxas shipped in the
+  pip package `nvidia-cuda-nvcc-cu12`.
+- TensorFloat-32 is on by default for float32 matmuls on recent GPUs. It keeps only ~10
+  mantissa bits (relative error ~1e-3), which spoils the second derivatives of the PINN, so
+  `setup_tf` turns it off unless the config asks for it.
+"""
+
+import importlib.util
+import os
+
+
+def _point_xla_to_pip_ptxas():
+    if "--xla_gpu_cuda_data_dir" in os.environ.get("XLA_FLAGS", ""):
+        return
+    try:
+        spec = importlib.util.find_spec("nvidia.cuda_nvcc")
+    except ModuleNotFoundError:
+        return
+    if spec is None or not spec.submodule_search_locations:
+        return
+    root = list(spec.submodule_search_locations)[0]
+    bin_dir = os.path.join(root, "bin")
+    if os.path.exists(os.path.join(bin_dir, "ptxas")):
+        flags = os.environ.get("XLA_FLAGS", "")
+        os.environ["XLA_FLAGS"] = (flags + " --xla_gpu_cuda_data_dir=" + root).strip()
+        os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+
+
+_point_xla_to_pip_ptxas()
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
+import tensorflow as tf  # noqa: E402  (must come after the environment setup above)
+
+
+def setup_tf(runtime_cfg):
+    """Apply the `runtime:` section of the config. Returns the float dtype name."""
+    tf.config.experimental.enable_tensor_float_32_execution(bool(runtime_cfg["tf32"]))
+    for gpu in tf.config.list_physical_devices("GPU"):
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError:
+            pass  # GPU already initialised (e.g. inside pytest); growth cannot change anymore
+    dtype = runtime_cfg["dtype"]
+    tf.keras.backend.set_floatx(dtype)
+    tf.keras.utils.set_random_seed(int(runtime_cfg["seed"]))
+    return dtype
+
+
+def device_name():
+    """'GPU' when TensorFlow sees a GPU, else 'CPU' (used to report GPU hours honestly)."""
+    return "GPU" if tf.config.list_physical_devices("GPU") else "CPU"
