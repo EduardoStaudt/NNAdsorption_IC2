@@ -11,7 +11,8 @@ and the collocation pool spreads `points_per_theta` (z~, t~) points per row on a
 continues, so the domain is covered more and more densely during training. The pool then gets new
 (z~, t~) points; RAR points of the fixed rows are kept, those of the replaced rows are dropped
 (they were chosen for the old theta). The table rows are tf.Variables, so the compiled training
-step reads the new values without being traced again.
+step reads the new values without being traced again. resample_every_epochs = 0: the Sobol theta
+are drawn once and kept for the whole run (fixed collocation theta, as the 50 cases of Phase 1).
 """
 
 import numpy as np
@@ -40,7 +41,8 @@ class ThetaCollocation:
         n_rar = int(rar["n_add"]) * (int(steps) // int(rar["every"]) + 1) if rar["enabled"] else 0
         self.pool = CollocationPool(n_init, n_rows, float(cfg["scales"]["t_final_factor"]), n_init + n_rar, self.seed)
         epoch = n_init / int(cfg["sampling"]["n_interior"])  # steps per pass over the pool
-        self.every_steps = max(1, int(round(float(tc["resample_every_epochs"]) * epoch)))
+        every = float(tc["resample_every_epochs"] or 0)
+        self.every_steps = max(1, int(round(every * epoch))) if every > 0 else 0  # 0: never renewed
         self.n_resamples = 0
 
     @property

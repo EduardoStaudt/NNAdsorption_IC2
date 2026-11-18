@@ -116,3 +116,16 @@ def test_trainer_calls_the_evaluator_every_eval_every_steps(tmp_path):
     trainer = Trainer(cfg, model, col.table, col.pool, str(tmp_path), evaluator=seen.append, eval_every=3)
     timing = trainer.run()
     assert seen == [3, 6] and timing["periodic_eval_s"] >= 0.0
+
+
+def test_zero_resample_epochs_keeps_the_theta_for_the_whole_run(tmp_path):
+    tf.keras.utils.set_random_seed(0)
+    cfg = small_cfg()
+    cfg["theta_colloc"]["resample_every_epochs"] = 0
+    cfg["sampling"]["rar"]["enabled"] = False
+    col = make_colloc(cfg, steps=4)
+    assert col.every_steps == 0
+    theta0 = col.table["theta"].numpy().copy()
+    Trainer(cfg, make_model(cfg, 2), col.table, col.pool, str(tmp_path), resampler=col).run()
+    assert col.n_resamples == 0
+    np.testing.assert_array_equal(col.table["theta"].numpy(), theta0)

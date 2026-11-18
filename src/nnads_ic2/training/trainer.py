@@ -193,7 +193,7 @@ class Trainer:
                 self.weights.update(stats)
             if rc["enabled"] and step % int(rc["every"]) == 0 and step < self.steps:
                 rar_info = self.rar()
-            if self.resampler is not None and step % self.resampler.every_steps == 0 and step < self.steps:
+            if self.resampler is not None and self.resampler.every_steps > 0 and step % self.resampler.every_steps == 0                     and step < self.steps:
                 self.resampler.resample()
             if step % int(lc["every"]) == 0 or step == self.steps:
                 w_min_v = float(w_min)

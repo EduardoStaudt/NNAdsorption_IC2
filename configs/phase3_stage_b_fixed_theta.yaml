@@ -1,0 +1,18 @@
+# Phase 3, item 3 (ablation in stage b): "Sobol off". The collocation theta are 50 Sobol theta of
+# the stage (b) subspace drawn once and kept for the whole run (as the 50 fixed cases of Phase 1),
+# instead of 2048 theta renewed every 10 epochs. Same budget: the pool keeps ~1.05 million points
+# (51 rows x 20 560 instead of 2049 x 512), same batch, same 50 000 steps.
+# The Cauchy loss is switched on with --set loss.robust_c=10 (off by default in stage b).
+inherit: phase2_stage_b.yaml
+
+theta_colloc:
+  n_theta: 50
+  points_per_theta: 20560
+  resample_every_epochs: 0
+
+loss:
+  weights:
+    data: 0.0
+
+logging:
+  run_name: phase3b_ablation
