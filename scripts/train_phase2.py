@@ -94,7 +94,7 @@ def main():
     ap.add_argument("--val", default=None, help="validation h5 of the stage (overrides phase2.val_data)")
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--run-name", default=None)
-    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="config overrides, e.g. model.width=256")
+    ap.add_argument("--set", nargs="*", action="extend", default=[], metavar="KEY=VALUE", help="config overrides, e.g. model.width=256")
     args = ap.parse_args()
 
     cfg = apply_overrides(load_config(args.config), args.set)

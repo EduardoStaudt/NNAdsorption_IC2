@@ -126,7 +126,7 @@ def main():
     ap.add_argument("--profile-stride", type=int, default=4, help="keep every k-th output time in the internal profiles")
     ap.add_argument("--max-solve-s", type=int, default=3600, help="skip a seed whose solve takes longer")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="config overrides, e.g. solver.nx=141")
+    ap.add_argument("--set", nargs="*", action="extend", default=[], metavar="KEY=VALUE", help="config overrides, e.g. solver.nx=141")
     args = ap.parse_args()
 
     cfg = apply_overrides(load_config(args.config), args.set)

@@ -33,7 +33,7 @@ def main():
     ap.add_argument("--n-plots", type=int, default=6)
     ap.add_argument("--split", choices=["all", "train", "val"], default="all",
                     help="parametric runs: evaluate only the training or validation seeds of the run (summary.json)")
-    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="overrides of the saved run config")
+    ap.add_argument("--set", nargs="*", action="extend", default=[], metavar="KEY=VALUE", help="overrides of the saved run config")
     ap.add_argument("--out-name", default=None, help="output folder inside the run (default eval/ or eval_<split>/)")
     args = ap.parse_args()
 

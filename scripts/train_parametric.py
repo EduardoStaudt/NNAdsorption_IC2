@@ -46,7 +46,7 @@ def main():
     ap.add_argument("--data", default=None, help="solver dataset (recorder h5); overrides data.path")
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--run-name", default=None)
-    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="config overrides, e.g. train.lr=5e-4")
+    ap.add_argument("--set", nargs="*", action="extend", default=[], metavar="KEY=VALUE", help="config overrides, e.g. train.lr=5e-4")
     args = ap.parse_args()
 
     cfg = apply_overrides(load_config(args.config), args.set)

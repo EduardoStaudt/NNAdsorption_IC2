@@ -40,7 +40,7 @@ def main():
     ap.add_argument("--config", default=os.path.join(ROOT, "configs", "pinn_single_case.yaml"))
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--run-name", default=None)
-    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="config overrides, e.g. loss.weights.data=1.0")
+    ap.add_argument("--set", nargs="*", action="extend", default=[], metavar="KEY=VALUE", help="config overrides, e.g. loss.weights.data=1.0")
     args = ap.parse_args()
 
     cfg = apply_overrides(load_config(args.config), args.set)
