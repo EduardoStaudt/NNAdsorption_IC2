@@ -97,3 +97,34 @@ def test_loss_weights_ignore_a_non_finite_batch():
     before = w.as_dict()
     w.update({"pde": np.array([10.0, 1.0]), "bc": np.array([np.nan, np.nan]), "data": np.array([1.0, 0.1])})
     assert w.as_dict() == before  # one NaN in the batch: no weight changes (it would stay NaN forever)
+
+
+def test_robust_residual_loss_has_the_gradient_of_the_cauchy_loss(example_case, float64):
+    from nnads_ic2.training.losses import PDE_TERMS, LossBuilder
+
+    p, s = example_case
+    arr = case_arrays(p, s, dimensionless_groups(p, s))
+    arr["theta"] = np.zeros(theta_dim(2))
+    table = stack_cases([arr], tf.float64)
+    model = PINN(2, theta_dim(2), MODEL_CFG, t_final=2.0).build_with_dummy()
+    rng = np.random.default_rng(1)
+    B, c = 256, 0.5
+    z = tf.constant(rng.uniform(0.0, 1.0, (B, 1)))
+    t = tf.constant(rng.uniform(0.0, 2.0, (B, 1)))
+    case = tf.zeros(B, tf.int32)
+    cfg = dict(pde_terms=dict(mass=1.0, ldf=1.0, energy=10.0, global_=1.0), causal=dict(enabled=False, n_bins=8))
+    cfg["pde_terms"]["global"] = cfg["pde_terms"].pop("global_")
+    plain = LossBuilder(model, table, cfg, p_min=1e-6)
+    robust = LossBuilder(model, table, dict(cfg, robust_c=c), p_min=1e-6)
+    eps = tf.constant(0.0, tf.float64)
+    with tf.GradientTape(persistent=True) as tape:
+        terms, _, s_pt = robust.interior(z, t, case, eps)
+        loss = tf.add_n([robust.pde_w[k] * terms[k] for k in PDE_TERMS])
+        cauchy = tf.reduce_mean(c * tf.math.log1p(plain.interior(z, t, case, eps)[2] / c))
+    g1 = tape.gradient(loss, model.trainable_variables)
+    g2 = tape.gradient(cauchy, model.trainable_variables)
+    for a, b in zip(g1, g2):
+        np.testing.assert_allclose(a.numpy(), b.numpy(), rtol=1e-8, atol=1e-12)
+    assert float(tf.reduce_max(s_pt)) > 10 * c  # the test covers the damped region (s >> c)
+    # robust_c missing or null: the plain mean squares of Phases 0-1
+    assert plain.robust_c == 0.0 and LossBuilder(model, table, dict(cfg, robust_c=None), 1e-6).robust_c == 0.0

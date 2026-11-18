@@ -12,5 +12,12 @@ phase2:
   train_data: dataset
   n_time_per_case: 200    # as in Phase 1
 
+# Over the whole domain about 1 % of the Sobol theta have a gas that hardly adsorbs at Tin (q_ref at
+# its floor, 1e-6 mol/kg) or an isotherm that changes by orders of magnitude within +-40 K; there
+# q~* = q*/q_ref reaches 1e3-1e6 and the squared residual of a few points (1e7-8e9) outweighed all
+# the others: the plain mean-square runs blew up at lr 1e-3 and 3e-4 (docs/phase2_results.md).
+loss:
+  robust_c: 10.0
+
 logging:
   run_name: phase2c

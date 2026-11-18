@@ -89,6 +89,10 @@ class LossBuilder:
         self.causal_on = bool(loss_cfg["causal"]["enabled"])
         self.n_bins = int(loss_cfg["causal"]["n_bins"])
         self.p_min = float(p_min)
+        # Cauchy (robust) loss on the PDE residual: rho(s) = c log(1 + s/c) of the per-point weighted
+        # squared residual s. Equal to s for s << c; a point with s >> c keeps a bounded influence.
+        # null or 0 = plain mean squares (Phases 0-1, stages a and b of Phase 2).
+        self.robust_c = float(loss_cfg.get("robust_c") or 0.0)
 
     def interior(self, z, t, case, eps):
         """PDE terms at interior points. Also returns per-point squared residual (for RAR)."""
@@ -103,11 +107,19 @@ class LossBuilder:
         )
         r2["global"] = r2.pop("global_")
         total = tf.add_n([self.pde_w[k] * r2[k] for k in PDE_TERMS])
+        if self.robust_c > 0:
+            # d rho/ds = 1/(1 + s/c): each point's terms get this weight (no gradient through it), so
+            # the gradient is that of mean(rho(s)); the causal slices see rho(s) instead of s
+            c = self.robust_c
+            r_w = tf.stop_gradient(1.0 / (1.0 + total / c))
+            causal_input = c * tf.math.log1p(total / c)
+        else:
+            r_w, causal_input = tf.ones_like(total), total
         if self.causal_on:
-            w, w_bins = causal_weights(t, g["t_final"], total, self.n_bins, eps)
+            w, w_bins = causal_weights(t, g["t_final"], causal_input, self.n_bins, eps)
         else:
             w, w_bins = tf.ones_like(total), tf.ones((self.n_bins,), total.dtype)
-        terms = {k: tf.reduce_mean(w * r2[k]) for k in PDE_TERMS}
+        terms = {k: tf.reduce_mean(w * r_w * r2[k]) for k in PDE_TERMS}
         return terms, w_bins, total
 
     def boundary(self, z_in, t_in, case_in, z_out, t_out, case_out):

@@ -61,6 +61,7 @@ loss:
   # energy x10: T~ stays small (dT_ref from the feed overestimates the real rise), so the energy
   # residual was too weak and the PINN converged to T~ = 0 (Phase 0, docs/phase0_results.md)
   pde_terms: {mass: 1.0, ldf: 1.0, energy: 10.0, global: 1.0}
+  robust_c: null          # c > 0: Cauchy loss c log(1 + s/c) of the PDE residual s (stage c of Phase 2)
   adaptive:
     method: grad_norm     # fixed | grad_norm (Wang, Teng & Perdikaris 2021)
     every: 100
