@@ -87,6 +87,39 @@ logging:
   keep_checkpoints: 3
   tensorboard: true       # optional: used only if the `tensorboard` package is installed (CSV is always written)
 
+cases:                    # parameter domain (Section 2.3) and prefilter; to be confirmed with the advisor for v23b
+  x_ranges:               # IC1 contract_io.X_RANGES
+    qm_ref: [1.0, 15.0]
+    k2: [-0.1, 0.0]
+    B_ref: [1.0e-4, 1.0]
+    k4: [0.0, 3200.0]
+    n_ref: [0.5, 1.5]
+    k6: [-2200.0, 2200.0]
+    kL: [0.01, 1.0]
+    dH: [5.0e+3, 5.0e+4]
+    Cpg: [25.0, 45.0]
+    eb: [0.30, 0.50]
+    rho_b: [400.0, 900.0]
+    Cps: [800.0, 1200.0]
+    vs: [0.001, 0.05]
+    Tin: [288.0, 323.0]
+    P: [1.0e+5, 3.0e+6]
+    L: [0.3, 1.5]
+    hw: [20.0, 100.0]
+    lam: [0.1, 0.8]
+    dp: [0.5e-3, 5.0e-3]
+    Dm: [5.0e-6, 3.0e-5]
+    Dt: [0.01, 0.06]
+  y0_range: [0.20, 0.75]  # carrier feed fraction (IC1 holdout_10k range)
+  log_params: [B_ref, kL, dp, Dm]   # sampled log-uniformly (IC1 recorder LOG_PARAMS)
+  max_tst_s: 1800.0       # prefilter: slowest front t_st <= 1800 s (t_F <= 3600 s)
+  sev_max: 0.9            # prefilter: IC1 severity < 0.9
+
+data:                     # solver dataset (recorder.py h5 format) for Phase 1
+  path: null
+  use_internal_profiles: false   # read profiles/<row>/ when the file has them
+  carrier: 0
+
 solver:                   # MOL reference solver (physics/mol_solver.py), tests and Phase 0 only
   nx: 281
   scheme: vanleer

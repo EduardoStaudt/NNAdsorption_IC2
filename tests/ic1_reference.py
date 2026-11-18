@@ -87,6 +87,79 @@ def cfg_from_json(e):
     )
 
 
+# --- contract_io.py X_RANGES and recorder.py sample_cfg_22 (recorder imports jax, so it is copied) ---
+X_RANGES = {
+    "qm_ref": (1.0, 15.0),
+    "k2": (-0.1, 0.0),
+    "B_ref": (1e-4, 1.0),
+    "k4": (0.0, 3200.0),
+    "n_ref": (0.5, 1.5),
+    "k6": (-2200.0, 2200.0),
+    "kL": (0.01, 1.0),
+    "dH": (5e3, 50e3),
+    "Cpg": (25.0, 45.0),
+    "eb": (0.30, 0.50),
+    "rho_b": (400.0, 900.0),
+    "Cps": (800.0, 1200.0),
+    "vs": (0.001, 0.05),
+    "Tin": (288.0, 323.0),
+    "P": (1e5, 3e6),
+    "L": (0.3, 1.5),
+    "hw": (20.0, 100.0),
+    "lam": (0.1, 0.8),
+    "dp": (0.5e-3, 5e-3),
+    "Dm": (5e-6, 3e-5),
+    "Dt": (0.01, 0.06),
+}
+LOG_PARAMS = {"B_ref", "kL", "dp", "Dm"}
+
+
+def sample_cfg_22(seed, Y0_LO, Y0_HI, NMAX=2):
+    rng = np.random.default_rng(seed)
+    XR = X_RANGES
+
+    def draw(name, n=1):
+        lo, hi = XR[name]
+        if name in LOG_PARAMS:
+            v = 10 ** rng.uniform(np.log10(lo), np.log10(hi), n)
+        else:
+            v = rng.uniform(lo, hi, n)
+        return v
+
+    qm_ref = draw("qm_ref", NMAX)
+    k2 = draw("k2", NMAX)
+    B_ref = draw("B_ref", NMAX)
+    k4 = draw("k4", NMAX)
+    n_ref = draw("n_ref", NMAX)
+    k6 = draw("k6", NMAX)
+    kL = draw("kL", NMAX)
+    dH = draw("dH", NMAX)
+    Cpg = draw("Cpg", NMAX)
+    k1 = qm_ref - k2 * TREF
+    k3 = B_ref * np.exp(-k4 / TREF)
+    k5 = n_ref - k6 / TREF
+    order = np.argsort(B_ref)
+
+    def ro(a):
+        return a[order]
+
+    qm_ref, k2, B_ref, k4, n_ref, k6, kL, dH, k1, k3, k5, Cpg = (
+        ro(qm_ref), ro(k2), ro(B_ref), ro(k4), ro(n_ref), ro(k6), ro(kL), ro(dH), ro(k1), ro(k3), ro(k5), ro(Cpg),
+    )
+    layer = dict(
+        k1=k1, k2=k2, k3=k3, k4=k4, k5=k5, k6=k6, Bref=B_ref, om=kL, dH=dH, Cpg=Cpg,
+        eb=float(draw("eb")[0]), rho_b=float(draw("rho_b")[0]), Cps=float(draw("Cps")[0]),
+    )
+    yc = float(rng.uniform(Y0_LO, Y0_HI))
+    y = np.array([yc, 1.0 - yc])
+    return dict(
+        layers=[layer], y=y, carrier=0,
+        vs=float(draw("vs")[0]), Tin=float(draw("Tin")[0]), P=float(draw("P")[0]), L=float(draw("L")[0]),
+        hw=float(draw("hw")[0]), lam=float(draw("lam")[0]), dp=float(draw("dp")[0]), Dm=float(draw("Dm")[0]),
+        Dt=float(draw("Dt")[0]),
+    )
+
+
 def load_ic1_module(ic1_root, relpath, name):
     """Load a live IC1 module from its file, or return None if the IC1 folder is missing."""
     path = os.path.join(ic1_root, relpath)
