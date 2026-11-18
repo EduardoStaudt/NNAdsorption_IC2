@@ -2,7 +2,7 @@
 
 Run inside WSL2 (TensorFlow GPU), from the repository root:
     ~/ic2env/bin/python scripts/train_single_case.py --config configs/pinn_single_case.yaml
-Options override the config: --steps N, --run-name NAME.
+Options override the config: --steps N, --run-name NAME, --set key.sub=value ...
 Outputs go to runs/<run-name>/: config.yaml, train_log.csv, checkpoints, model.weights.h5,
 summary.json and figures.
 """
@@ -18,7 +18,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
-from nnads_ic2.config import load_config, save_config  # noqa: E402
+from nnads_ic2.config import apply_overrides, load_config, save_config  # noqa: E402
 from nnads_ic2.data.sampling import CollocationPool  # noqa: E402
 from nnads_ic2.eval.report import evaluate_case  # noqa: E402
 from nnads_ic2.experiment import case_table, make_model, outlet_data, reference_solution, single_case  # noqa: E402
@@ -32,9 +32,10 @@ def main():
     ap.add_argument("--config", default=os.path.join(ROOT, "configs", "pinn_single_case.yaml"))
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--run-name", default=None)
+    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="config overrides, e.g. loss.weights.data=1.0")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    cfg = apply_overrides(load_config(args.config), args.set)
     if args.steps is not None:
         cfg["train"]["steps"] = args.steps
     run_name = args.run_name or cfg["logging"]["run_name"]

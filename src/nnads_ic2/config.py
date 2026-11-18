@@ -34,6 +34,20 @@ def load_config(path):
     return cfg
 
 
+def apply_overrides(cfg, items):
+    """Command-line overrides 'a.b.c=value' (value parsed as YAML, e.g. 10, 1.0e-3, true, [1, 2])."""
+    for item in items or []:
+        key, _, raw = item.partition("=")
+        if not _:
+            raise ValueError("override must look like key.sub=value, got %r" % item)
+        node = cfg
+        parts = key.strip().split(".")
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+        node[parts[-1]] = yaml.safe_load(raw)
+    return cfg
+
+
 def save_config(cfg, path):
     """Write the fully resolved config (saved next to every run for reproducibility)."""
     with open(path, "w", encoding="utf-8") as f:

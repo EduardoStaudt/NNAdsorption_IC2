@@ -18,7 +18,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
-from nnads_ic2.config import load_config, resolve_path, save_config  # noqa: E402
+from nnads_ic2.config import apply_overrides, load_config, resolve_path, save_config  # noqa: E402
 from nnads_ic2.data.loader import load_recorder_h5  # noqa: E402
 from nnads_ic2.data.sampling import CollocationPool  # noqa: E402
 from nnads_ic2.eval.report import evaluate_cases  # noqa: E402
@@ -36,9 +36,10 @@ def main():
     ap.add_argument("--data", default=None, help="solver dataset (recorder h5); overrides data.path")
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--run-name", default=None)
+    ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="config overrides, e.g. train.lr=5e-4")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    cfg = apply_overrides(load_config(args.config), args.set)
     if args.data:
         cfg["data"]["path"] = os.path.abspath(args.data)
     if args.steps is not None:
