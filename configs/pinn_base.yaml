@@ -122,6 +122,14 @@ cases:                    # parameter domain (Section 2.3) and prefilter; to be 
   log_params: [B_ref, kL, dp, Dm]   # sampled log-uniformly (IC1 recorder LOG_PARAMS)
   max_tst_s: 1800.0       # prefilter: slowest front t_st <= 1800 s (t_F <= 3600 s)
   sev_max: 0.9            # prefilter: IC1 severity < 0.9
+  # IC1 seeds the MOL solver could not solve in the Phase 1 dataset (21: step size below round-off;
+  # 38, 62: more than 1 h). Never drawn again by make_mol_dataset; reported apart (Phase 2).
+  hard_seeds: [21, 38, 62]
+
+domain:                   # where the parametric PINN works (data/domain.py)
+  mode: full              # full: every theta column over cases.x_ranges | subspace: base case + `vary`
+  base_case: configs/cases/ic1_example_h2_co2.json   # subspace: values of the fixed columns (IC1 example_usage)
+  vary: []                # subspace: theta columns that vary (names of physics/params.theta_names)
 
 data:                     # solver dataset (recorder.py h5 format) for Phase 1
   path: null

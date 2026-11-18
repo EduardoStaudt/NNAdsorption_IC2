@@ -1,0 +1,10 @@
+# Phase 2: parametric PINN with collocation at theta drawn from the domain (no solver needed for
+# the residuals), dimension curriculum (stages a, b, c). Stage files set `domain` and the data.
+inherit: pinn_parametric.yaml
+
+train:
+  steps: 50000
+  jit_compile: true       # XLA: 9.4 ms/step instead of 34 ms/step on the Phase 1 setup (same losses)
+
+logging:
+  run_name: phase2

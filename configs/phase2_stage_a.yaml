@@ -1,0 +1,10 @@
+# Phase 2, stage (a): 4 parameters vary around the IC1 example_usage case, the others stay fixed.
+inherit: phase2_base.yaml
+
+domain:
+  mode: subspace
+  # feed velocity, carrier feed fraction (the strong gas gets 1 - y0), feed temperature, kL of the strong gas
+  vary: [vs, y0, Tin, L0_c1_kL]
+
+logging:
+  run_name: phase2a

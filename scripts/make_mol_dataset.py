@@ -1,12 +1,17 @@
-"""Provisional Phase 1 dataset from the MOL reference solver (NOT the v23b solver).
+"""Provisional datasets from the MOL reference solver (NOT the v23b solver).
 
 Run inside WSL2, from the repository root:
     ~/ic2env/bin/python scripts/make_mol_dataset.py --n-cases 60 --workers 16
+    ~/ic2env/bin/python scripts/make_mol_dataset.py --config configs/phase2_stage_a.yaml \\
+        --n-cases 20 --seed-start 100000 --purpose validation --out data/<name>.h5
+    ~/ic2env/bin/python scripts/make_mol_dataset.py --seeds 21 38 62 --max-solve-s 10800 ...
 
-Seeds seed_start, seed_start + 1, ... are sampled with the IC1 sampler; the cases that pass the
-prefilter (`cases:` section of the config) are solved with physics/mol_solver.py (`solver:`
-section), each in its own process on one CPU core, until n_cases are solved. A solver failure
-or a solve longer than --max-solve-s is skipped and the next seed takes its place.
+Seeds seed_start, seed_start + 1, ... are drawn from the `domain:` of the config (data/domain.py:
+IC1 sampler for the full domain, or a subspace around the base case); the cases that pass the
+prefilter (`cases:` section) are solved with physics/mol_solver.py (`solver:` section), each in
+its own process on one CPU core, until n_cases are solved. A solver failure or a solve longer
+than --max-solve-s is skipped and the next seed takes its place. The seeds in cases.hard_seeds
+are skipped. With --seeds, exactly those seeds are solved (failures are not replaced).
 
 Output: the IC1 recorder h5 format plus v_out and internal profiles. The tag "provisório_MOL" is
 in the file name (without the accent) and in the attribute `dataset_tag`, so these data are never
@@ -39,7 +44,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from nnads_ic2.config import apply_overrides, load_config  # noqa: E402
-from nnads_ic2.data.cases import prefilter, sample_case_ic1  # noqa: E402
+from nnads_ic2.data.domain import Domain  # noqa: E402
 from nnads_ic2.data.loader import write_recorder_h5  # noqa: E402
 from nnads_ic2.physics.mol_solver import solve_case  # noqa: E402
 from nnads_ic2.physics.scales import compute_scales  # noqa: E402
@@ -74,18 +79,16 @@ def solve_one(seed, p, scales_cfg, solver_cfg, max_solve_s):
     return seed, sol, err, time.perf_counter() - wall0, time.process_time() - cpu0
 
 
-def accepted_cases(cfg, seed_start, max_seeds, rejected):
+def accepted_cases(domain, seeds, rejected, skip=()):
     """Yield (seed, CaseParams, prefilter info) of the seeds that pass the prefilter."""
-    cc = cfg["cases"]
-    n_comp = int(cfg["physics"]["n_comp"])
-    for seed in range(seed_start, seed_start + max_seeds):
-        p = sample_case_ic1(seed, cc["x_ranges"], cc["y0_range"], cc["log_params"], n_comp)
-        ok, info = prefilter(p, float(cc["max_tst_s"]), float(cc["sev_max"]))
+    for seed in seeds:
+        if seed in skip:
+            continue
+        p, ok, info = domain.sample(seed)
         if ok:
             yield seed, p, info
         else:
             rejected.append(seed)
-    raise RuntimeError("no more seeds: raise --max-seeds")
 
 
 def git_version():
@@ -115,6 +118,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=os.path.join(ROOT, "configs", "pinn_base.yaml"))
     ap.add_argument("--n-cases", type=int, default=60)
+    ap.add_argument("--seeds", type=int, nargs="*", default=None, help="solve exactly these seeds (no replacement)")
+    ap.add_argument("--purpose", default="training", help="stored as an attribute (training, validation, hard cases)")
     ap.add_argument("--seed-start", type=int, default=0)
     ap.add_argument("--max-seeds", type=int, default=100000, help="give up after this many sampled seeds")
     ap.add_argument("--workers", type=int, default=16)
@@ -126,23 +131,43 @@ def main():
 
     cfg = apply_overrides(load_config(args.config), args.set)
     n_comp = int(cfg["physics"]["n_comp"])
+    domain = Domain(cfg, ROOT)
+    if args.seeds:
+        args.n_cases = len(args.seeds)
     out = args.out or os.path.join(ROOT, "data", "%s_n%d_%dcases.h5" % (FILE_TAG, n_comp, args.n_cases))
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    print("%s -> %s | %d workers | solver %s" % (DATASET_TAG, out, args.workers, json.dumps(cfg["solver"])), flush=True)
+    print("%s -> %s | %d workers | solver %s | domain %s" % (DATASET_TAG, out, args.workers, json.dumps(cfg["solver"]),
+                                                           json.dumps(domain.describe())), flush=True)
 
     rejected, failed, done, info = [], [], [], {}
-    candidates = accepted_cases(cfg, args.seed_start, args.max_seeds, rejected)
+    if args.seeds:
+        candidates = accepted_cases(domain, args.seeds, rejected)
+    else:
+        seeds = range(args.seed_start, args.seed_start + args.max_seeds)
+        candidates = accepted_cases(domain, seeds, rejected, skip=set(cfg["cases"].get("hard_seeds") or ()))
     t_start = time.perf_counter()
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         running = {}
 
         def submit_next():
-            seed, p, pre = next(candidates)
+            """Start the next accepted seed; False when there are no seeds left."""
+            nxt = next(candidates, None)
+            if nxt is None:
+                return False
+            seed, p, pre = nxt
             info[seed] = (p, pre)
             running[ex.submit(solve_one, seed, p, cfg["scales"], cfg["solver"], args.max_solve_s)] = seed
+            return True
 
-        while len(done) + len(running) < args.n_cases:
-            submit_next()
+        def fill():
+            n_target = args.n_cases - len(failed) if args.seeds else args.n_cases  # --seeds: no replacement
+            while len(done) + len(running) < n_target:
+                if not submit_next():
+                    if not args.seeds:
+                        raise RuntimeError("no more seeds: raise --max-seeds")
+                    return
+
+        fill()
         while running:
             finished, _ = wait(list(running), return_when=FIRST_COMPLETED)
             for fut in finished:
@@ -154,9 +179,11 @@ def main():
                 else:
                     failed.append(dict(seed=seed, error=err, wall_s=wall))
                     print("seed %6d  FAILED after %.1f s: %s" % (seed, wall, err), flush=True)
-            while len(done) + len(running) < args.n_cases:
-                submit_next()
+            fill()
     elapsed = time.perf_counter() - t_start
+    if not done:
+        print(json.dumps(dict(failed=failed, rejected=rejected), indent=1), flush=True)
+        sys.exit("no seed was solved")
 
     done.sort(key=lambda d: d[0])
     items = [(seed, info[seed][0], sol) for seed, sol, _, _ in done]
@@ -167,7 +194,7 @@ def main():
                          wall_s=wall, cpu_s=cpu, nfev=sol["info"]["nfev"], njev=sol["info"]["njev"], nlu=sol["info"]["nlu"]))
     walls = np.array([r["wall_s"] for r in rows])
     stats = dict(n_cases=len(rows), n_failed=len(failed), n_rejected_prefilter=len(rejected),
-                 n_seeds_sampled=max(info) - args.seed_start + 1,
+                 n_seeds_sampled=len(info) + len(rejected),
                  wall_per_seed_mean_s=float(walls.mean()), wall_per_seed_median_s=float(np.median(walls)),
                  wall_per_seed_min_s=float(walls.min()), wall_per_seed_max_s=float(walls.max()),
                  cpu_hours_total=float(sum(r["cpu_s"] for r in rows) + sum(f["wall_s"] for f in failed)) / 3600.0,
@@ -179,6 +206,8 @@ def main():
         git_commit=git_version(),
         solver_cfg=json.dumps(cfg["solver"]),
         cases_cfg=json.dumps(cfg["cases"]),
+        domain=json.dumps(domain.describe()),
+        purpose=args.purpose,
         t_final_factor=float(cfg["scales"]["t_final_factor"]),
         seed_start=args.seed_start,
         rejected_seeds=json.dumps(rejected),
