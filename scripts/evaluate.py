@@ -1,0 +1,63 @@
+"""Re-evaluate a trained run (config.yaml and model.weights.h5 saved in runs/<name>/).
+
+    ~/ic2env/bin/python scripts/evaluate.py --run runs/phase0_single_case
+    ~/ic2env/bin/python scripts/evaluate.py --run runs/phase1_parametric --data <holdout.h5>
+Single-case runs are compared with the (cached) MOL reference of their case. Parametric runs are
+evaluated on all valid cases of an h5 dataset (e.g. the 10k holdout), with the theta scaler saved
+at training time. Results go to <run>/eval/.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(ROOT, "src"))
+
+from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
+from nnads_ic2.config import load_config  # noqa: E402
+from nnads_ic2.data.loader import load_recorder_h5  # noqa: E402
+from nnads_ic2.eval.report import evaluate_case, evaluate_cases  # noqa: E402
+from nnads_ic2.experiment import case_table, make_model, reference_solution, single_case  # noqa: E402
+from nnads_ic2.physics.params import ThetaScaler  # noqa: E402
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run", required=True)
+    ap.add_argument("--data", default=None, help="h5 dataset for parametric runs")
+    ap.add_argument("--n-plots", type=int, default=6)
+    args = ap.parse_args()
+
+    run_dir = os.path.abspath(args.run)
+    cfg = load_config(os.path.join(run_dir, "config.yaml"))
+    dtype = runtime.setup_tf(cfg["runtime"])
+    out_dir = os.path.join(run_dir, "eval")
+    os.makedirs(out_dir, exist_ok=True)
+    n_comp = int(cfg["physics"]["n_comp"])
+
+    if args.data is None:  # single-case run
+        p = single_case(cfg, ROOT)
+        table, (s,), _, _ = case_table([p], cfg, dtype)
+        model = make_model(cfg, p.n_comp)
+        model.load_weights(os.path.join(run_dir, "model.weights.h5"))
+        sol = reference_solution(p, s, cfg, cfg["case"]["name"], ROOT)
+        res = evaluate_case(model, table, 0, p, s, sol, cfg, out_dir)
+    else:
+        with open(os.path.join(run_dir, "theta_scaler.json"), encoding="utf-8") as f:
+            scaler = ThetaScaler.from_dict(json.load(f))
+        cases = load_recorder_h5(os.path.abspath(args.data), n_comp, carrier=int(cfg["data"]["carrier"]))
+        params = [c.params for c in cases]
+        table, scales, _, _ = case_table(params, cfg, dtype, scaler=scaler)
+        model = make_model(cfg, n_comp)
+        model.load_weights(os.path.join(run_dir, "model.weights.h5"))
+        refs = [dict(t=c.t, c_out=c.c_out, y_out=c.y_out, T_out=c.T_out, v_out=c.v_out) for c in cases]
+        res = evaluate_cases(model, table, list(range(len(cases))), params, scales, refs, cfg, out_dir, args.n_plots)
+    with open(os.path.join(out_dir, "summary_eval.json"), "w", encoding="utf-8") as f:
+        json.dump(res, f, indent=2, default=float)
+    print(json.dumps(res, indent=1, default=float))
+
+
+if __name__ == "__main__":
+    main()
