@@ -67,6 +67,8 @@ loss:
     alpha: 0.1
     min: 1.0e-3
     max: 100.0            # cap: easy terms (BC, data) otherwise reach 1e4 and make training noisy (Phase 0)
+    max_data: 10.0        # lower cap for lambda_data: at 100 the Phase 1 hybrid overfitted its training outlets
+    fixed: []             # groups kept at their initial weight, e.g. [data] = fixed lambda_data (no annealing)
   causal:
     enabled: true         # Wang, Sankaran & Perdikaris 2022
     n_bins: 32

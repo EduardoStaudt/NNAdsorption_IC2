@@ -72,3 +72,18 @@ def test_grad_norm_annealing_raises_weight_of_small_gradient_group():
     w.update({"pde": np.array([10.0, 1.0]), "bc": np.array([1.0, 0.1])})  # lambda_hat_bc = 10 / 0.1
     assert w.as_dict()["bc"] == pytest.approx(0.5 * 1.0 + 0.5 * 100.0)
     assert w.as_dict()["data"] == 0.0 and w.as_dict()["pde"] == 1.0
+
+
+def test_data_weight_has_its_own_cap_and_can_be_fixed():
+    base = dict(weights=dict(data=1.0, pde=1.0, bc=1.0, ic=0.0),
+                adaptive=dict(method="grad_norm", every=10, alpha=1.0, min=1e-3, max=100.0, max_data=10.0))
+    stats = {"pde": np.array([10.0, 1.0]), "bc": np.array([1.0, 1e-3]), "data": np.array([1.0, 1e-3])}
+    w = LossWeights(base, "float64")
+    w.update(stats)  # lambda_hat = 1e4 for both groups
+    assert w.as_dict()["bc"] == 100.0 and w.as_dict()["data"] == 10.0
+    fixed = dict(base, adaptive=dict(base["adaptive"], fixed=["data"]))
+    w = LossWeights(fixed, "float64")
+    w.update(stats)
+    assert w.as_dict()["data"] == 1.0 and w.as_dict()["bc"] == 100.0
+    with pytest.raises(ValueError):
+        LossWeights(dict(base, adaptive=dict(base["adaptive"], fixed=["dta"])), "float64")

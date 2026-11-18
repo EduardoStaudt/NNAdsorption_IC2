@@ -15,6 +15,10 @@ class LossWeights:
         lambda_k    <- (1 - alpha) lambda_k + alpha lambda_hat_k
     A group whose gradients are small (e.g. boundary terms) gets a larger weight, so no term is
     ignored by the optimizer. Groups with initial weight 0 stay off.
+
+    Every weight is capped at `max`; the data weight at `max_data` (lower: with the cap of 100 the
+    Phase 1 hybrid fitted its training outlets and generalized worse). Groups listed in `fixed`
+    keep their initial weight (e.g. fixed: [data] -> lambda_data constant, no annealing).
     """
 
     def __init__(self, loss_cfg, dtype):
@@ -26,6 +30,11 @@ class LossWeights:
         self.every = int(ad["every"])
         self.alpha = float(ad["alpha"])
         self.lam_min, self.lam_max = float(ad["min"]), float(ad["max"])
+        self.lam_max_group = {"data": float(ad.get("max_data", self.lam_max))}
+        self.fixed = tuple(ad.get("fixed") or ())
+        unknown = set(self.fixed) - set(GROUPS)
+        if unknown:
+            raise ValueError("adaptive.fixed: unknown groups %s" % sorted(unknown))
         self.ref = "pde"
         self.lam = {k: tf.Variable(float(init[k]), trainable=False, dtype=dtype, name="lambda_" + k) for k in GROUPS}
         self.active = tuple(k for k in GROUPS if float(init[k]) > 0)
@@ -38,11 +47,11 @@ class LossWeights:
         """stats[group] = (max |grad|, mean |grad|) of the unweighted group loss."""
         ref_max = float(stats[self.ref][0]) * float(self.lam[self.ref].numpy())
         for k in self.active:
-            if k == self.ref or k not in stats:
+            if k == self.ref or k in self.fixed or k not in stats:
                 continue
             lam_hat = ref_max / max(float(stats[k][1]), 1e-30)
             new = (1.0 - self.alpha) * float(self.lam[k].numpy()) + self.alpha * lam_hat
-            self.lam[k].assign(min(max(new, self.lam_min), self.lam_max))
+            self.lam[k].assign(min(max(new, self.lam_min), self.lam_max_group.get(k, self.lam_max)))
 
     def as_dict(self):
         return {k: float(v.numpy()) for k, v in self.lam.items()}
