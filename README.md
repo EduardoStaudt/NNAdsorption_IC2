@@ -8,6 +8,7 @@ gases; the current phases use 2 gases and 1 adsorbent.
 - `docs/nondim.md`: dimensionless equations and groups
 - `docs/architecture.md`: modules, network, loss, hooks for 5 gases / 2 adsorbents
 - `docs/phase0_results.md`: Phase 0 (one case) results
+- `docs/phase1_results.md`: Phase 1 (50 + 10 cases, provisional MOL data) results
 
 ## Environment (Windows: TensorFlow GPU needs WSL2)
 
