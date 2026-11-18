@@ -36,6 +36,16 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 import tensorflow as tf  # noqa: E402  (must come after the environment setup above)
 
 
+def set_float_dtype(dtype):
+    """Make new Keras layers compute in `dtype` ('float32' or 'float64').
+
+    Keras 3 caches its global dtype policy the first time a layer is built, so changing only
+    floatx is not enough: the policy must be set too.
+    """
+    tf.keras.backend.set_floatx(dtype)
+    tf.keras.config.set_dtype_policy(dtype)
+
+
 def setup_tf(runtime_cfg):
     """Apply the `runtime:` section of the config. Returns the float dtype name."""
     tf.config.experimental.enable_tensor_float_32_execution(bool(runtime_cfg["tf32"]))
@@ -45,7 +55,7 @@ def setup_tf(runtime_cfg):
         except RuntimeError:
             pass  # GPU already initialised (e.g. inside pytest); growth cannot change anymore
     dtype = runtime_cfg["dtype"]
-    tf.keras.backend.set_floatx(dtype)
+    set_float_dtype(dtype)
     tf.keras.utils.set_random_seed(int(runtime_cfg["seed"]))
     return dtype
 
