@@ -43,7 +43,7 @@ def plot_history(csv_path, path):
         return
     step = np.array([float(r["step"]) for r in rows])
     skip = {"step", "elapsed_s", "ms_per_step", "lr", "causal_eps", "causal_w_min", "pool_size",
-            "rar_mean_resid", "rar_added_resid", "theta_resamples"}
+            "rar_mean_resid", "rar_added_resid", "theta_resamples", "skipped_steps"}
     terms = [k for k in rows[0] if k not in skip and not k.startswith("lambda_")]
     lambdas = [k for k in rows[0] if k.startswith("lambda_")]
     fig, ax = plt.subplots(1, 2, figsize=(13, 4.2))

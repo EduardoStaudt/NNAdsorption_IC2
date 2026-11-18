@@ -86,3 +86,20 @@ def test_trainer_resamples_during_training(tmp_path):
     with open(os.path.join(tmp_path, "train_log.csv"), encoding="utf-8") as f:
         header = f.readline()
     assert "theta_resamples" in header
+
+
+def test_trainer_skips_steps_with_a_non_finite_loss(tmp_path):
+    tf.keras.utils.set_random_seed(0)
+    cfg = small_cfg()
+    cfg["sampling"]["rar"]["enabled"] = False
+    col = make_colloc(cfg, steps=4)
+    col.table["Pe"].assign(tf.fill(tf.shape(col.table["Pe"]), float("nan")))  # every residual is NaN
+    model = make_model(cfg, 2)
+    trainer = Trainer(cfg, model, col.table, col.pool, str(tmp_path))
+    before = [w.numpy().copy() for w in model.trainable_variables]
+    trainer.run()
+    assert int(trainer.skipped.numpy()) == 4
+    for w0, w in zip(before, model.trainable_variables):
+        np.testing.assert_array_equal(w.numpy(), w0)  # zero gradients from the start: Adam does not move
+    with open(os.path.join(tmp_path, "train_log.csv"), encoding="utf-8") as f:
+        assert "skipped_steps" in f.readline()

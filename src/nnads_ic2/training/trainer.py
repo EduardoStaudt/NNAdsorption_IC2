@@ -51,6 +51,7 @@ class Trainer:
         self._stats_fn = tf.function(self._grad_stats)
         self._resid_fn = tf.function(self._pointwise_residual)
         self.step_var = tf.Variable(0, dtype=tf.int64, trainable=False)
+        self.skipped = tf.Variable(0, dtype=tf.int64, trainable=False)  # steps with a non-finite loss/gradient
         ckpt = tf.train.Checkpoint(model=model, optimizer=self.opt, step=self.step_var)
         self.ckpt_mgr = tf.train.CheckpointManager(
             ckpt, os.path.join(run_dir, "ckpt"), max_to_keep=int(cfg["logging"]["keep_checkpoints"])
@@ -119,6 +120,13 @@ class Trainer:
             terms, groups, w_bins = self._all_terms(b)
             total = self._total(groups)
         grads = tape.gradient(total, self.model.trainable_variables)
+        # one non-finite point is enough to turn every weight into NaN: such a step gets a zero
+        # gradient (Adam then only coasts on its momentum) and is counted
+        finite = tf.math.is_finite(total)
+        for g in grads:
+            finite = tf.logical_and(finite, tf.reduce_all(tf.math.is_finite(g)))
+        grads = [tf.where(finite, g, tf.zeros_like(g)) for g in grads]
+        self.skipped.assign_add(tf.cast(tf.logical_not(finite), tf.int64))
         self.opt.apply_gradients(zip(grads, self.model.trainable_variables))
         return total, terms, tf.reduce_min(w_bins)
 
@@ -197,7 +205,8 @@ class Trainer:
                 row.update({k: float(v) for k, v in terms.items()})
                 row.update({"lambda_" + k: v for k, v in self.weights.as_dict().items()})
                 row.update(causal_eps=float(self.causal.eps.numpy()), causal_w_min=w_min_v, pool_size=self.pool.size,
-                           rar_mean_resid=rar_info[0], rar_added_resid=rar_info[1])
+                           rar_mean_resid=rar_info[0], rar_added_resid=rar_info[1],
+                           skipped_steps=int(self.skipped.numpy()))
                 if self.resampler is not None:
                     row["theta_resamples"] = self.resampler.n_resamples
                 if writer is None:

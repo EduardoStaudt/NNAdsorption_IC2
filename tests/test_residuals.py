@@ -97,3 +97,23 @@ def test_residuals_small_on_solver_solution_and_large_on_random_field(example_ca
     for k in rms_solver:
         assert rms_solver[k] < 0.01 * rms_random[k], k
     assert rms_solver["eos"] < 1e-5  # the solver keeps sum(c) = P/RT almost exactly
+
+
+def test_residuals_stay_finite_when_the_network_temperature_is_unphysical(example_case):
+    # T <= 0 K (T~ <= -1/eps_T) made 1/T and exp(k4/T) infinite and one such point turned every
+    # weight into NaN (Phase 2, stage c); the closures now floor T at Tin/2. float32 as in training.
+    p, s = example_case
+    table = stack_cases([case_arrays(p, s, dimensionless_groups(p, s))], tf.float32)
+    T_kelvin = np.array([-2.0 * s.Tin, 0.0, 10.0, 0.3 * s.Tin, s.Tin, 1.2 * s.Tin])
+    n = T_kelvin.size
+    rng = np.random.default_rng(1)
+    fields, _ = random_fields(rng, p.n_comp, rng.uniform(0.05, 1.95, n), rng.uniform(0.05, 0.95, n))
+    fields["T"] = ((T_kelvin - s.Tin) / s.dT_ref)[:, None]
+    f = {k: tf.constant(v, tf.float32) for k, v in fields.items()}
+    res = pde_residuals(f, gather_cases(table, tf.zeros(n, tf.int32)), p_min=1e-6)
+    for k, r in res.items():
+        assert np.all(np.isfinite(r.numpy())), k
+    # physical temperatures (the last two points) are not touched by the floor
+    eps_T = float(np.ravel(table["eps_T"].numpy())[0])
+    np.testing.assert_allclose(res["eos"].numpy()[-2:, 0],
+                               fields["c"][-2:].sum(axis=1) - 1.0 / (1.0 + eps_T * fields["T"][-2:, 0]), rtol=1e-5)

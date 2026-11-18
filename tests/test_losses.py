@@ -87,3 +87,13 @@ def test_data_weight_has_its_own_cap_and_can_be_fixed():
     assert w.as_dict()["data"] == 1.0 and w.as_dict()["bc"] == 100.0
     with pytest.raises(ValueError):
         LossWeights(dict(base, adaptive=dict(base["adaptive"], fixed=["dta"])), "float64")
+
+
+
+def test_loss_weights_ignore_a_non_finite_batch():
+    cfg = dict(weights=dict(data=1.0, pde=1.0, bc=1.0, ic=0.0),
+               adaptive=dict(method="grad_norm", every=10, alpha=0.5, min=1e-3, max=1e4))
+    w = LossWeights(cfg, "float64")
+    before = w.as_dict()
+    w.update({"pde": np.array([10.0, 1.0]), "bc": np.array([np.nan, np.nan]), "data": np.array([1.0, 0.1])})
+    assert w.as_dict() == before  # one NaN in the batch: no weight changes (it would stay NaN forever)

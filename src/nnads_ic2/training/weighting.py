@@ -1,5 +1,6 @@
 """Loss weights: fixed, or adapted by gradient norms; and the causal-training schedule."""
 
+import numpy as np
 import tensorflow as tf
 
 GROUPS = ("data", "pde", "bc", "ic")
@@ -45,6 +46,8 @@ class LossWeights:
 
     def update(self, stats):
         """stats[group] = (max |grad|, mean |grad|) of the unweighted group loss."""
+        if not all(np.all(np.isfinite(v)) for v in stats.values()):
+            return  # a non-finite batch: keep the current weights
         ref_max = float(stats[self.ref][0]) * float(self.lam[self.ref].numpy())
         for k in self.active:
             if k == self.ref or k in self.fixed or k not in stats:

@@ -62,6 +62,14 @@ def gather_cases(table, case_idx):
     return {k: tf.gather(v, case_idx) for k, v in table.items()}
 
 
+# Floor of the temperature seen by the closures: T >= T_MIN_FRAC * Tin, i.e. 1 + eps_T T~ >= T_MIN_FRAC.
+# Only unphysical network outputs reach it (real beds stay well above Tin/2; the coldest MOL
+# solution seen, hard seed 21, went down to 0.74 Tin). Over the full domain eps_T = dT_ref/Tin
+# reaches 0.8, so T~ = -1.3 already means T = 0 K, where 1/T and exp(k4/T) are infinite: one such
+# point made every weight NaN at step 550 of the first stage (c) run (Phase 2).
+T_MIN_FRAC = 0.5
+
+
 def _sum(x):
     """Sum over components, keeping a trailing axis of size 1."""
     return tf.reduce_sum(x, axis=-1, keepdims=True)
@@ -70,7 +78,7 @@ def _sum(x):
 def total_concentration(f, g):
     """C~_T = Tin/T = 1/(1 + eps_T T~) (ideal gas, constant P) and its derivatives (chain rule)."""
     e = g["eps_T"]
-    D = 1.0 + e * f["T"]
+    D = tf.maximum(1.0 + e * f["T"], T_MIN_FRAC)  # = T/Tin, floored
     CT = 1.0 / D
     dCT_dT = -e / D**2
     CT_t = dCT_dT * f["T_t"]
@@ -82,7 +90,7 @@ def total_concentration(f, g):
 def qstar_dimless(f, g, p_min):
     """q~*_i: equilibrium loading at the local gas state, divided by q_ref,i."""
     c = g["C_F"] * f["c"]
-    T = g["Tin"] + g["dT_ref"] * f["T"]
+    T = tf.maximum(g["Tin"] + g["dT_ref"] * f["T"], T_MIN_FRAC * g["Tin"])
     return qstar_tf(c, T, {k: g[k] for k in ISO_KEYS}, p_min=p_min) / g["q_ref"]
 
 
@@ -118,7 +126,7 @@ def global_residual(f, g):
 
 def eos_residual(f, g):
     """Closure: the gas concentrations must add up to the ideal-gas total P/(RT)."""
-    return _sum(f["c"]) - 1.0 / (1.0 + g["eps_T"] * f["T"])
+    return _sum(f["c"]) - 1.0 / tf.maximum(1.0 + g["eps_T"] * f["T"], T_MIN_FRAC)
 
 
 def inlet_residuals(f, g):
