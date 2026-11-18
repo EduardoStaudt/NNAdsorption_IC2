@@ -10,15 +10,19 @@ import numpy as np  # noqa: E402
 
 
 def plot_outlet(ref, pred, names, path):
-    """Outlet mole fractions, temperature and velocity: reference (lines) vs PINN (dashed)."""
+    """Outlet mole fractions, temperature and velocity: reference (lines) vs PINN (dashed).
+
+    ref = None: PINN only (cases without a solver reference)."""
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     for i, nm in enumerate(names):
-        ax[0].plot(ref["t"], ref["y_out"][:, i], "-", color=colors[i], lw=1.8, label="reference %s" % nm)
+        if ref is not None:
+            ax[0].plot(ref["t"], ref["y_out"][:, i], "-", color=colors[i], lw=1.8, label="reference %s" % nm)
         ax[0].plot(pred["t"], pred["y_out"][:, i], "--", color=colors[i], lw=1.5, label="PINN %s" % nm)
-    ax[1].plot(ref["t"], ref["T_out"], "-", color="k", lw=1.8, label="reference")
+    if ref is not None:
+        ax[1].plot(ref["t"], ref["T_out"], "-", color="k", lw=1.8, label="reference")
     ax[1].plot(pred["t"], pred["T_out"], "--", color="tab:red", lw=1.5, label="PINN")
-    if ref.get("v_out") is not None:  # datasets may lack v(L, t)
+    if ref is not None and ref.get("v_out") is not None:  # datasets may lack v(L, t)
         ax[2].plot(ref["t"], ref["v_out"], "-", color="k", lw=1.8, label="reference")
     ax[2].plot(pred["t"], pred["v_out"], "--", color="tab:red", lw=1.5, label="PINN")
     for a, lab in zip(ax, ["outlet mole fraction", "outlet T (K)", "outlet velocity (m/s)"]):
