@@ -57,7 +57,7 @@ def training_cases(cfg, domain):
     if ph["train_data"] == "dataset":
         path = resolve_path(cfg["data"]["path"], ROOT)
         cases = load_recorder_h5(path, int(cfg["physics"]["n_comp"]), carrier=int(cfg["data"]["carrier"]),
-                                 use_internal_profiles=True)
+                                 use_internal_profiles=True, keys=cfg["data"].get("keys"))
         p1 = cfg["phase1"]
         perm = np.random.default_rng(int(p1["split_seed"])).permutation(len(cases))  # the Phase 1 split
         n_tr, n_val = int(p1["n_train_cases"]), int(p1["n_val_cases"])
@@ -65,7 +65,7 @@ def training_cases(cfg, domain):
         val = [cases[i] for i in perm[n_tr : n_tr + n_val]]
         return dict(params=[c.params for c in train], refs=[dataset_reference(c) for c in train],
                     fields=[c.profiles for c in train], seeds=[c.seed for c in train],
-                    source="training split of %s (%s)" % (path, dataset_info(path).get("dataset_tag")),
+                    source="training split of %s (%s)" % (path, dataset_info(path, cfg["data"].get("keys")).get("dataset_tag")),
                     extra=dict(params=[c.params for c in val], refs=[dataset_reference(c) for c in val],
                                fields=[c.profiles for c in val], seeds=[c.seed for c in val]))
     raise ValueError("phase2.train_data must be 'base_case' or 'dataset'")
@@ -117,7 +117,7 @@ def main():
     train = training_cases(cfg, domain)
     print("training cases: %d (%s)" % (len(train["params"]), train["source"]), flush=True)
     val_path = resolve_path(cfg["phase2"]["val_data"], ROOT)
-    val_info = dataset_info(val_path)
+    val_info = dataset_info(val_path, cfg["data"].get("keys"))
     print("validation %s | tag %s | purpose %s" % (val_path, val_info.get("dataset_tag"), val_info.get("purpose")), flush=True)
     if "MOL" in str(val_info.get("dataset_tag", "")):
         print("WARNING: provisional MOL data (not v23b): keep these results apart from v23b runs", flush=True)
@@ -146,7 +146,8 @@ def main():
     trainer = Trainer(cfg, model, colloc.table, colloc.pool, run_dir, data=data, resampler=colloc)
     timing = trainer.run()
 
-    val_cases = load_recorder_h5(val_path, n_comp, carrier=int(cfg["data"]["carrier"]), use_internal_profiles=True)
+    val_cases = load_recorder_h5(val_path, n_comp, carrier=int(cfg["data"]["carrier"]), use_internal_profiles=True,
+                                 keys=cfg["data"].get("keys"))
     val = dict(params=[c.params for c in val_cases], refs=[dataset_reference(c) for c in val_cases],
                fields=[c.profiles for c in val_cases], seeds=[c.seed for c in val_cases])
     n_plots = int(cfg["phase2"]["n_plots"])

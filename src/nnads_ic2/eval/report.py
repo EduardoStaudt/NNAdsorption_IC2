@@ -25,18 +25,21 @@ def solution_fields(sol):
 
 
 def _reference_fields_dimless(ref, s):
-    return dict(
-        c=ref["c"] / s.C_F,  # [nt, n, nx]
-        q=ref["q"] / s.q_ref[None, :, None],
-        T=(ref["T"] - s.Tin) / s.dT_ref,  # [nt, nx]
-        v=ref["v"] / s.vs,
+    """The fields present in `ref` (a dataset may lack some, e.g. v), dimensionless."""
+    scale = dict(
+        c=lambda F: F / s.C_F,  # [nt, n, nx]
+        q=lambda F: F / s.q_ref[None, :, None],
+        T=lambda F: (F - s.Tin) / s.dT_ref,  # [nt, nx]
+        v=lambda F: F / s.vs,
     )
+    return {k: fn(ref[k]) for k, fn in scale.items() if ref.get(k) is not None}
 
 
 def field_errors(model, table, case_index, p, s, ref, ev, plot_path=None):
     """RMSE of each dimensionless field over a regular (z~, t~) grid (and the error maps).
 
-    `ref`: internal fields t, z, c, q, T, v (see the module docstring).
+    `ref`: internal fields t, z and any of c, q, T, v (see the module docstring); missing
+    fields are skipped.
     """
     nz, nt = int(ev["field_grid"]["nz"]), int(ev["field_grid"]["nt"])
     z_cells = ref["z"] / s.L
@@ -52,19 +55,20 @@ def field_errors(model, table, case_index, p, s, ref, ev, plot_path=None):
         return RegularGridInterpolator((t_grid, z_cells), F)(pts).reshape(nt, nz)
 
     ref_maps, pred_maps = {}, {}
-    for i in range(p.n_comp):
-        ref_maps["c%d" % i] = interp(rf["c"][:, i, :])
-        pred_maps["c%d" % i] = pred["c"][:, i].reshape(nt, nz)
-        ref_maps["q%d" % i] = interp(rf["q"][:, i, :])
-        pred_maps["q%d" % i] = pred["q"][:, i].reshape(nt, nz)
-    ref_maps["T"] = interp(rf["T"])
-    pred_maps["T"] = pred["T"][:, 0].reshape(nt, nz)
-    ref_maps["v"] = interp(rf["v"])
-    pred_maps["v"] = pred["v"][:, 0].reshape(nt, nz)
+    for name in ("c", "q"):
+        if name in rf:
+            for i in range(p.n_comp):
+                ref_maps["%s%d" % (name, i)] = interp(rf[name][:, i, :])
+                pred_maps["%s%d" % (name, i)] = pred[name][:, i].reshape(nt, nz)
+    for name in ("T", "v"):
+        if name in rf:
+            ref_maps[name] = interp(rf[name])
+            pred_maps[name] = pred[name][:, 0].reshape(nt, nz)
     if plot_path is not None:
         plots.plot_fields(zg, tg, ref_maps, pred_maps, plot_path)
     out = {k: float(np.sqrt(np.mean((pred_maps[k] - ref_maps[k]) ** 2))) for k in ref_maps}
-    out["T_K"] = out["T"] * s.dT_ref  # in kelvin: comparable between runs with different dT_ref
+    if "T" in out:
+        out["T_K"] = out["T"] * s.dT_ref  # in kelvin: comparable between runs with different dT_ref
     return out
 
 

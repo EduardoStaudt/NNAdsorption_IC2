@@ -109,6 +109,9 @@ def profile_data(profiles, scales, case_indices):
     for pr, s, k in zip(profiles, scales, case_indices):
         if pr is None:
             continue
+        missing = [name for name in ("c", "q", "T", "v") if pr.get(name) is None]
+        if missing:
+            raise ValueError("profile data loss needs c, q, T and v; the dataset lacks %s" % missing)
         TT, ZZ = np.meshgrid(pr["t"] / s.t_ref, pr["z"] / s.L, indexing="ij")
         n = pr["c"].shape[1]
         out["z"].append(ZZ.ravel())

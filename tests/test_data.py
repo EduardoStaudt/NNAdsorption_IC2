@@ -119,3 +119,54 @@ def test_rar_pool_keeps_its_size_and_the_new_points():
     pool.add(z[idx], t[idx], case[idx])
     assert pool.size == 1200 and pool.from_rar.sum() == 400
     assert np.all(np.abs(pool.z[pool.from_rar] - 0.5) <= np.sort(np.abs(z - 0.5))[399] + 1e-15)
+
+
+def three_gas_case():
+    """IC1 example case plus a third gas (a copy of CO2 with lower affinity), feed 50/30/20."""
+    from nnads_ic2.physics.params import CaseParams
+
+    p = CaseParams.from_ic1_json(os.path.join(REPO_ROOT, "configs", "cases", "ic1_example_h2_co2.json"))
+    arrays = {k: np.append(getattr(p, k), getattr(p, k)[1]) for k in ("k1", "k2", "k3", "k4", "k5", "k6", "kL", "dH", "Cpg")}
+    arrays["k3"][2] *= 0.5
+    scalars = {k: getattr(p, k) for k in ("eb", "rho_b", "Cps", "vs", "Tin", "P", "L", "hw", "lam", "dp", "Dm", "Dt")}
+    return CaseParams(**arrays, **scalars, y_feed=np.array([0.5, 0.3, 0.2]), y_init=np.array([1.0, 0.0, 0.0]))
+
+
+def test_loader_reads_a_v23b_like_file_without_the_optional_series(tmp_path):
+    # three gases (theta width 41), theta under another name, no c_out, no v_out, profiles without v
+    p = three_gas_case()
+    nt, nx, k = 50, 11, 4
+    rng = np.random.default_rng(0)
+    y = rng.dirichlet(np.ones(3), nt)
+    T = 300.0 + rng.uniform(0, 5, nt)
+    path = os.path.join(tmp_path, "v23b_like.h5")
+    vlf = h5py.special_dtype(vlen=np.float32)
+    with h5py.File(path, "w") as f:
+        f.create_dataset("X", data=p.to_theta()[None, :])
+        ys = f.create_dataset("y_out", (1, 3), dtype=vlf)
+        for i in range(3):
+            ys[0, i] = y[:, i]
+        ts = f.create_dataset("T_out", (1,), dtype=vlf)
+        ts[0] = T
+        f.create_dataset("TF", data=[100.0])
+        f.create_dataset("NT", data=[nt])
+        g = f.create_group("profiles/0")
+        g.create_dataset("t", data=np.linspace(0, 100, k))
+        g.create_dataset("c", data=rng.uniform(0, 1, (k, 3, nx)))
+        g.create_dataset("q", data=rng.uniform(0, 1, (k, 3, nx)))
+        g.create_dataset("T", data=rng.uniform(300, 305, (k, nx)))
+        g.attrs["z"] = np.linspace(0, p.L, nx)
+    keys = {"theta": "X"}
+    (case,) = load_recorder_h5(path, keys=keys, use_internal_profiles=True)
+    assert case.params.n_comp == 3 and case.y_out.shape == (nt, 3)
+    np.testing.assert_allclose(case.params.y_feed, [0.5, 0.3, 0.2])
+    assert case.derived == ("c_out",) and case.v_out is None
+    from nnads_ic2.physics.constants import R
+
+    np.testing.assert_allclose(case.c_out, y.astype(np.float32) * p.P / (R * T.astype(np.float32)[:, None]), rtol=1e-6)
+    assert set(case.profiles) == {"t", "z", "c", "q", "T"}
+    np.testing.assert_allclose(case.t, (np.arange(nt) + 1) * 100.0 / nt)
+    info = dataset_info(path, keys)
+    assert info["n_comp"] == 3 and info["n_valid"] == 1 and not info["has"]["v_out"] and not info["has"]["c_out"]
+    with pytest.raises(ValueError):
+        load_recorder_h5(path, n_comp=2, keys=keys)

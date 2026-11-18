@@ -62,3 +62,20 @@ def test_evaluate_cases_reports_every_phase0_metric(tmp_path):
         assert len(list(csv.DictReader(f))) == 2
     assert os.path.exists(os.path.join(tmp_path, "fields_case000.png"))
     assert not os.path.exists(os.path.join(tmp_path, "fields_case001.png"))  # only n_plots figures
+
+
+def test_evaluate_cases_without_velocity_data(tmp_path):
+    # a dataset without v(L, t) and without internal v: the velocity metrics are skipped
+    tf.keras.utils.set_random_seed(0)
+    cfg = small_cfg()
+    cases = [p for _, p in sample_cases(range(40), cfg["cases"])[:2]]
+    table, scales, _, _ = case_table(cases, cfg, "float32")
+    model = make_model(cfg, 2)
+    rng = np.random.default_rng(1)
+    refs, fields = zip(*[fake_reference(p, compute_scales(p, **cfg["scales"]), 50, 7, rng) for p in cases])
+    for ref, fl in zip(refs, fields):
+        ref["v_out"] = None
+        del fl["v"]
+    res = evaluate_cases(model, table, [0, 1], cases, scales, list(refs), cfg, str(tmp_path), n_plots=1, fields=list(fields))
+    assert "v_out/vs" not in res["outlet"] and "field_rmse_v" not in res["per_case_mean_abs"]
+    assert np.isfinite(res["per_case_mean_abs"]["field_rmse_T_K"])

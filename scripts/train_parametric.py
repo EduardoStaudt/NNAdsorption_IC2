@@ -64,13 +64,14 @@ def main():
     ph = cfg["phase1"]
     n_comp = int(cfg["physics"]["n_comp"])
     data_path = resolve_path(cfg["data"]["path"], ROOT)
-    ds_info = dataset_info(data_path)
+    ds_info = dataset_info(data_path, cfg["data"].get("keys"))
     print("dataset %s | tag %s | source: %s" % (data_path, ds_info.get("dataset_tag", "-"), ds_info.get("source", "-")), flush=True)
     if "MOL" in str(ds_info.get("dataset_tag", "")):
         print("WARNING: provisional MOL dataset (not v23b): keep these results apart from v23b runs", flush=True)
     # profiles are always read: training cases use them only if data.use_internal_profiles is true,
     # validation cases only for the field errors
-    cases = load_recorder_h5(data_path, n_comp, carrier=int(cfg["data"]["carrier"]), use_internal_profiles=True)
+    cases = load_recorder_h5(data_path, n_comp, carrier=int(cfg["data"]["carrier"]), use_internal_profiles=True,
+                             keys=cfg["data"].get("keys"))
     rng = np.random.default_rng(int(ph["split_seed"]))
     perm = rng.permutation(len(cases))
     n_tr, n_val = int(ph["n_train_cases"]), int(ph["n_val_cases"])

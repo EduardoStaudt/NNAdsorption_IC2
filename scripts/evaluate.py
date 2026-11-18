@@ -33,12 +33,13 @@ def main():
     ap.add_argument("--split", choices=["all", "train", "val"], default="all",
                     help="parametric runs: evaluate only the training or validation seeds of the run (summary.json)")
     ap.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="overrides of the saved run config")
+    ap.add_argument("--out-name", default=None, help="output folder inside the run (default eval/ or eval_<split>/)")
     args = ap.parse_args()
 
     run_dir = os.path.abspath(args.run)
     cfg = apply_overrides(load_config(os.path.join(run_dir, "config.yaml")), args.set)
     dtype = runtime.setup_tf(cfg["runtime"])
-    out_dir = os.path.join(run_dir, "eval" if args.split == "all" else "eval_" + args.split)
+    out_dir = os.path.join(run_dir, args.out_name or ("eval" if args.split == "all" else "eval_" + args.split))
     os.makedirs(out_dir, exist_ok=True)
     n_comp = int(cfg["physics"]["n_comp"])
 
@@ -53,7 +54,7 @@ def main():
         with open(os.path.join(run_dir, "theta_scaler.json"), encoding="utf-8") as f:
             scaler = ThetaScaler.from_dict(json.load(f))
         cases = load_recorder_h5(os.path.abspath(args.data), n_comp, carrier=int(cfg["data"]["carrier"]),
-                                 use_internal_profiles=True)
+                                 use_internal_profiles=True, keys=cfg["data"].get("keys"))
         if args.split != "all":
             with open(os.path.join(run_dir, "summary.json"), encoding="utf-8") as f:
                 seeds = json.load(f)[args.split + "_seeds"]

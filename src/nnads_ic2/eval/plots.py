@@ -18,7 +18,8 @@ def plot_outlet(ref, pred, names, path):
         ax[0].plot(pred["t"], pred["y_out"][:, i], "--", color=colors[i], lw=1.5, label="PINN %s" % nm)
     ax[1].plot(ref["t"], ref["T_out"], "-", color="k", lw=1.8, label="reference")
     ax[1].plot(pred["t"], pred["T_out"], "--", color="tab:red", lw=1.5, label="PINN")
-    ax[2].plot(ref["t"], ref["v_out"], "-", color="k", lw=1.8, label="reference")
+    if ref.get("v_out") is not None:  # datasets may lack v(L, t)
+        ax[2].plot(ref["t"], ref["v_out"], "-", color="k", lw=1.8, label="reference")
     ax[2].plot(pred["t"], pred["v_out"], "--", color="tab:red", lw=1.5, label="PINN")
     for a, lab in zip(ax, ["outlet mole fraction", "outlet T (K)", "outlet velocity (m/s)"]):
         a.set_xlabel("t (s)")
@@ -38,7 +39,7 @@ def plot_history(csv_path, path):
         return
     step = np.array([float(r["step"]) for r in rows])
     skip = {"step", "elapsed_s", "ms_per_step", "lr", "causal_eps", "causal_w_min", "pool_size",
-            "rar_mean_resid", "rar_added_resid"}
+            "rar_mean_resid", "rar_added_resid", "theta_resamples"}
     terms = [k for k in rows[0] if k not in skip and not k.startswith("lambda_")]
     lambdas = [k for k in rows[0] if k.startswith("lambda_")]
     fig, ax = plt.subplots(1, 2, figsize=(13, 4.2))

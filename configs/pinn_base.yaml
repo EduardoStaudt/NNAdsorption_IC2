@@ -135,6 +135,7 @@ data:                     # solver dataset (recorder.py h5 format) for Phase 1
   path: null
   use_internal_profiles: false   # read profiles/<row>/ when the file has them
   carrier: 0
+  keys: {}                # other h5 dataset names, e.g. {theta: X_v3} (defaults: data/loader.py DEFAULT_KEYS)
 
 solver:                   # MOL reference solver (physics/mol_solver.py), tests and Phase 0 only
   nx: 281

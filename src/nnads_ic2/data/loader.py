@@ -12,12 +12,19 @@ at t_k = (k + 1) TF / NT. Axial grid of Tz/qz: file attribute `grid` ("nodes": z
 the IC1 solver; "cells": z_j = (j + 1/2) L/NX, finite volumes). IC1 files have no attribute and
 use nodes.
 
-IC2 extensions (optional; the v23b format is not known yet):
-    v_out  [N]      variable-length outlet velocity [m/s]
-    profiles/<row>/{t, c, q, T, v}   internal fields at a few times (z grid in attribute `z`)
+IC2 extensions (optional; the exact v23b layout is not known yet):
+    v_out  [N]      variable-length outlet velocity v(L, t) [m/s]
+    profiles/<row>/{t, c, q, T, v}   internal fields at a few times (z grid in attribute `z`);
+                                     every field except t is optional (e.g. no v)
     solve_info/<name> [N]            per-row solver statistics (e.g. wall time per seed)
     file attributes, e.g. `dataset_tag` ("provisório_MOL": MOL data, not v23b) and `source`
 `use_internal_profiles=True` reads the profiles when present; `dataset_info` reads the attributes.
+
+Prepared for the v23b dataset: the key names can be changed with `keys` (config data.keys,
+defaults = recorder names above), n_comp follows from the width of the theta vector (10 n + 11
+columns, IC1 layout), and c_out, v_out and the profiles are optional. Without c_out, the outlet
+concentrations come from the model's ideal-gas closure at constant pressure, c_i = y_i P/(R T)
+(the case records it in `derived`). Every component keeps its own series (no y1 = 1 - y0).
 """
 
 from dataclasses import dataclass
@@ -25,7 +32,12 @@ from dataclasses import dataclass
 import h5py
 import numpy as np
 
+from ..physics.constants import R
 from ..physics.params import CaseParams
+
+DEFAULT_KEYS = dict(theta="X_v2", c_out="c_out", y_out="y_out", T_out="T_out", v_out="v_out", Tz="Tz", qz="qz",
+                    TF="TF", NT="NT", seeds="seeds", valid="valid", profiles="profiles")
+PROFILE_FIELDS = ("c", "q", "T", "v")
 
 
 @dataclass
@@ -41,7 +53,8 @@ class SolverCase:
     c_out: np.ndarray = None  # [nt, n]
     v_out: np.ndarray = None  # [nt]
     final: dict = None  # z [NX], T [NX], q [n, NX] at t = TF
-    profiles: dict = None  # t [k], z [NX], c [k, n, NX], q [k, n, NX], T [k, NX], v [k, NX]
+    profiles: dict = None  # t [k], z [NX], c [k, n, NX], q [k, n, NX], T [k, NX], v [k, NX] (fields optional)
+    derived: tuple = ()  # series not in the file, computed by the loader (e.g. "c_out")
 
 
 def _axial_grid(L, nx, grid):
@@ -54,55 +67,82 @@ def _text(v):
     return v.decode() if isinstance(v, bytes) else v
 
 
-def dataset_info(path):
+def dataset_info(path, keys=None):
     """File attributes of a dataset (tag, source, solver settings...) plus its row counts."""
+    k = dict(DEFAULT_KEYS, **(keys or {}))
     with h5py.File(path, "r") as f:
-        info = {k: _text(v) for k, v in f.attrs.items()}
-        info = {k: (v.tolist() if isinstance(v, np.ndarray) else v.item() if isinstance(v, np.generic) else v)
-                for k, v in info.items()}
-        n = f["X_v2"].shape[0]
+        info = {name: _text(v) for name, v in f.attrs.items()}
+        info = {name: (v.tolist() if isinstance(v, np.ndarray) else v.item() if isinstance(v, np.generic) else v)
+                for name, v in info.items()}
+        n = f[k["theta"]].shape[0]
         info["n_rows"] = int(n)
-        info["n_valid"] = int(np.sum(f["valid"][:])) if "valid" in f else int(n)
+        info["n_valid"] = int(np.sum(f[k["valid"]][:])) if k["valid"] in f else int(n)
+        info["n_comp"] = infer_n_comp(f[k["theta"]].shape[1])
+        info["has"] = {name: k[name] in f for name in ("c_out", "v_out", "Tz", "qz", "profiles")}
     return info
 
 
-def load_recorder_h5(path, n_comp, carrier=0, use_internal_profiles=False, valid_only=True, rows=None):
-    """Read the cases of a recorder-format h5 file into a list of SolverCase."""
+def infer_n_comp(width):
+    """Number of gases from the width of the theta vector: 9 n + 3 + 9 + (n - 1) = 10 n + 11 columns."""
+    n, rest = divmod(int(width) - 11, 10)
+    if rest or n < 1:
+        raise ValueError("theta width %d does not fit the IC1 layout (10 n + 11 columns)" % width)
+    return n
+
+
+def _series(f, key, r, n_comp):
+    return np.stack([np.asarray(f[key][r, i], dtype=np.float64) for i in range(n_comp)], axis=1)
+
+
+def load_recorder_h5(path, n_comp=None, carrier=0, use_internal_profiles=False, valid_only=True, rows=None, keys=None):
+    """Read the cases of a recorder-format h5 file into a list of SolverCase.
+
+    n_comp=None: taken from the theta width (and checked against it when given).
+    keys: other dataset names, e.g. {"theta": "X_v3"} (defaults: DEFAULT_KEYS).
+    """
+    k = dict(DEFAULT_KEYS, **(keys or {}))
     out = []
     with h5py.File(path, "r") as f:
-        N = f["X_v2"].shape[0]
+        N, width = f[k["theta"]].shape
+        n_file = infer_n_comp(width)
+        if n_comp is not None and int(n_comp) != n_file:
+            raise ValueError("%s has theta for %d gases, n_comp=%d was requested" % (path, n_file, n_comp))
+        n_comp = n_file
         grid = _text(f.attrs.get("grid", "nodes"))
         rows = np.arange(N) if rows is None else np.asarray(rows)
-        valid = f["valid"][:] if "valid" in f else np.ones(N, dtype=np.int8)
+        valid = f[k["valid"]][:] if k["valid"] in f else np.ones(N, dtype=np.int8)
         for r in rows:
             r = int(r)
             if valid_only and not valid[r]:
                 continue
-            theta = np.asarray(f["X_v2"][r], dtype=np.float64)
+            theta = np.asarray(f[k["theta"]][r], dtype=np.float64)
             p = CaseParams.from_theta(theta, n_comp, carrier=carrier)
-            TF, NT = float(f["TF"][r]), int(f["NT"][r])
-            y_out = np.stack([np.asarray(f["y_out"][r, i], dtype=np.float64) for i in range(n_comp)], axis=1)
+            TF, NT = float(f[k["TF"]][r]), int(f[k["NT"]][r])
+            y_out = _series(f, k["y_out"], r, n_comp)
             nt = y_out.shape[0]
             case = SolverCase(
                 row=r,
-                seed=int(f["seeds"][r]) if "seeds" in f else r,
+                seed=int(f[k["seeds"]][r]) if k["seeds"] in f else r,
                 params=p,
                 theta=theta,
                 TF=TF,
                 t=(np.arange(nt) + 1) * TF / NT,
                 y_out=y_out,
-                T_out=np.asarray(f["T_out"][r], dtype=np.float64),
+                T_out=np.asarray(f[k["T_out"]][r], dtype=np.float64),
             )
-            if "c_out" in f:
-                case.c_out = np.stack([np.asarray(f["c_out"][r, i], dtype=np.float64) for i in range(n_comp)], axis=1)
-            if "v_out" in f:
-                case.v_out = np.asarray(f["v_out"][r], dtype=np.float64)
-            if "Tz" in f and "qz" in f:
-                Tz = np.asarray(f["Tz"][r], dtype=np.float64)
-                case.final = dict(z=_axial_grid(p.L, Tz.size, grid), T=Tz, q=np.asarray(f["qz"][r], dtype=np.float64))
-            if use_internal_profiles and "profiles" in f and str(r) in f["profiles"]:
-                g = f["profiles"][str(r)]
-                case.profiles = {k: np.asarray(g[k], dtype=np.float64) for k in ("t", "c", "q", "T", "v")}
+            if k["c_out"] in f:
+                case.c_out = _series(f, k["c_out"], r, n_comp)
+            else:  # ideal gas at the (uniform, constant) column pressure
+                case.c_out = y_out * p.P / (R * case.T_out[:, None])
+                case.derived = ("c_out",)
+            if k["v_out"] in f:
+                case.v_out = np.asarray(f[k["v_out"]][r], dtype=np.float64)
+            if k["Tz"] in f and k["qz"] in f:
+                Tz = np.asarray(f[k["Tz"]][r], dtype=np.float64)
+                case.final = dict(z=_axial_grid(p.L, Tz.size, grid), T=Tz, q=np.asarray(f[k["qz"]][r], dtype=np.float64))
+            if use_internal_profiles and k["profiles"] in f and str(r) in f[k["profiles"]]:
+                g = f[k["profiles"]][str(r)]
+                case.profiles = {name: np.asarray(g[name], dtype=np.float64) for name in ("t",) + PROFILE_FIELDS if name in g}
                 case.profiles["z"] = np.asarray(g.attrs["z"], dtype=np.float64)
             out.append(case)
     return out
