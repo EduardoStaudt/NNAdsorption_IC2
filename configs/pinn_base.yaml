@@ -54,13 +54,15 @@ loss:
     pde: 1.0
     bc: 1.0
     ic: 0.0
-  pde_terms: {mass: 1.0, ldf: 1.0, energy: 1.0, global: 1.0}
+  # energy x10: T~ stays small (dT_ref from the feed overestimates the real rise), so the energy
+  # residual was too weak and the PINN converged to T~ = 0 (Phase 0, docs/phase0_results.md)
+  pde_terms: {mass: 1.0, ldf: 1.0, energy: 10.0, global: 1.0}
   adaptive:
     method: grad_norm     # fixed | grad_norm (Wang, Teng & Perdikaris 2021)
     every: 100
     alpha: 0.1
     min: 1.0e-3
-    max: 1.0e4
+    max: 100.0            # cap: easy terms (BC, data) otherwise reach 1e4 and make training noisy (Phase 0)
   causal:
     enabled: true         # Wang, Sankaran & Perdikaris 2022
     n_bins: 32
