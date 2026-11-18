@@ -19,6 +19,7 @@ phase2:
   data_seed: 0
   n_plots: 6
   eval_every: 0           # > 0: outlet metrics on the validation set every so many steps (val_curve.csv)
+  init_from: null         # trained run directory to start from (fine-tuning: its weights, network, dT_ratio, theta scaler)
 
 train:
   steps: 50000

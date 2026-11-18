@@ -1,10 +1,12 @@
 """Building blocks shared by the scripts: cases -> scales -> case table -> model."""
 
+import copy
+import json
 import os
 
 import numpy as np
 
-from .config import resolve_path
+from .config import load_config, resolve_path
 from .models.pinn import PINN
 from .physics import mol_solver
 from .physics.params import CaseParams, ThetaScaler, theta_dim, theta_log_mask
@@ -63,6 +65,17 @@ def resolve_dT_ratio(cfg, cases, rises):
         print("dT_ref: measured rise / feed estimate = %.4g (%s of %d case(s))" % (ratio, "median" if n > 1 else "value", n), flush=True)
     sc["dT_ratio"] = float(ratio)
     return float(ratio)
+
+
+def pretrained_setup(cfg, run_dir):
+    """Fine-tuning from a trained run: take its network, its dT_ratio and its theta scaler, so the
+    inputs and scales are exactly those the weights were trained with. Updates cfg in place and
+    returns the scaler; the weights are loaded from run_dir/model.weights.h5 once the model is built."""
+    pre = load_config(os.path.join(run_dir, "config.yaml"))
+    cfg["model"] = copy.deepcopy(pre["model"])
+    cfg["scales"]["dT_ratio"] = float(pre["scales"]["dT_ratio"])
+    with open(os.path.join(run_dir, "theta_scaler.json"), encoding="utf-8") as f:
+        return ThetaScaler.from_dict(json.load(f))
 
 
 def make_model(cfg, n_comp):

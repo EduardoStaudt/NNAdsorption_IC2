@@ -1,0 +1,22 @@
+# Phase 3, item 5: hybrid as a fine-tuning step (ready, not run: the hybrid waits for the v23b
+# dataset). Start from a trained stage (c) physics run (phase2.init_from: its weights, network,
+# dT_ratio and theta scaler), then add the outlet data at a fixed lambda_data = 0.1 (no annealing),
+# with a lower learning rate. With the v23b data: point data.path to it and --val to its validation
+# split. Steps and learning rate are first guesses.
+inherit: phase2_stage_c.yaml
+
+phase2:
+  init_from: runs/phase3c_long
+
+loss:
+  weights:
+    data: 0.1
+  adaptive:
+    fixed: [data]
+
+train:
+  steps: 20000
+  lr: 1.0e-4
+
+logging:
+  run_name: phase3c_finetune

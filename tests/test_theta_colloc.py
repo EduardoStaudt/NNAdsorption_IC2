@@ -156,3 +156,31 @@ def test_trainer_draws_front_points_at_each_renewal(tmp_path):
     assert col.n_resamples == 1 and col.n_front_draws == 1
     w = trainer.front_weights(col.pool.z[:10], col.pool.t[:10], col.pool.case[:10])
     assert w.shape == (10,) and np.all(np.isfinite(w)) and np.all(w >= 0)
+
+
+def test_pretrained_setup_reuses_network_scales_scaler_and_weights(tmp_path):
+    import json
+
+    from nnads_ic2.config import save_config
+    from nnads_ic2.experiment import pretrained_setup
+
+    tf.keras.utils.set_random_seed(0)
+    cfg = small_cfg()  # dT_ratio 0.2, width 16
+    dom = Domain(cfg, REPO_ROOT)
+    scaler = fit_theta_scaler(ThetaSampler(dom, seed=5).draw(64) + [dom.base], cfg)
+    model = make_model(cfg, 2)
+    save_config(cfg, os.path.join(tmp_path, "config.yaml"))
+    with open(os.path.join(tmp_path, "theta_scaler.json"), "w", encoding="utf-8") as f:
+        json.dump(scaler.to_dict(), f)
+    model.save_weights(os.path.join(tmp_path, "model.weights.h5"))
+
+    new = small_cfg()
+    new["model"]["width"] = 32
+    new["scales"]["dT_ratio"] = None
+    got = pretrained_setup(new, str(tmp_path))
+    assert new["model"]["width"] == 16 and new["scales"]["dT_ratio"] == 0.2
+    assert json.dumps(got.to_dict(), sort_keys=True) == json.dumps(scaler.to_dict(), sort_keys=True)
+    model2 = make_model(new, 2)
+    model2.load_weights(os.path.join(tmp_path, "model.weights.h5"))
+    for a, b in zip(model.trainable_variables, model2.trainable_variables):
+        np.testing.assert_array_equal(a.numpy(), b.numpy())

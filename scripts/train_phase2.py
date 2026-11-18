@@ -8,6 +8,9 @@ Solver data for training (used only by the hybrid, loss.weights.data > 0; the ph
 no solver data except the scalar dT_ratio of the temperature scale):
     phase2.train_data = base_case   outlet of the MOL reference of domain.base_case (subspace stages)
     phase2.train_data = dataset     the Phase 1 training split of data.path (whole domain)
+Fine-tuning: phase2.init_from = a trained run directory; the run starts from its weights, with its
+network, dT_ratio and theta scaler (e.g. a physics run, then the outlet data at a small fixed
+lambda_data: configs/phase3_finetune_c.yaml).
 Collocation: the training cases plus theta_colloc.n_theta Sobol theta from the domain, renewed
 every theta_colloc.resample_every_epochs passes over the pool (training/theta_colloc.py).
 Validation: every valid case of --val (MOL cases of the stage, never seen in training). The
@@ -33,7 +36,9 @@ from nnads_ic2.config import apply_overrides, load_config, resolve_path, save_co
 from nnads_ic2.data.domain import Domain, ThetaSampler  # noqa: E402
 from nnads_ic2.data.loader import dataset_info, load_recorder_h5  # noqa: E402
 from nnads_ic2.eval.report import evaluate_cases, flat_metrics, solution_fields  # noqa: E402
-from nnads_ic2.experiment import case_table, fit_theta_scaler, make_model, outlet_data, reference_solution, resolve_dT_ratio  # noqa: E402
+from nnads_ic2.experiment import (  # noqa: E402
+    case_table, fit_theta_scaler, make_model, outlet_data, pretrained_setup, reference_solution, resolve_dT_ratio,
+)
 from nnads_ic2.physics.scales import compute_scales, measured_temperature_rise  # noqa: E402
 from nnads_ic2.training.theta_colloc import ThetaCollocation  # noqa: E402
 from nnads_ic2.training.trainer import Trainer  # noqa: E402
@@ -117,6 +122,10 @@ def main():
     print("device %s | domain %s | %s" % (runtime.device_name(), json.dumps(domain.describe()),
                                          "hybrid (outlet data)" if hybrid else "physics only"), flush=True)
 
+    init_dir = resolve_path(cfg["phase2"]["init_from"], ROOT) if cfg["phase2"].get("init_from") else None
+    pre_scaler = pretrained_setup(cfg, init_dir) if init_dir else None
+    if init_dir:
+        print("fine-tuning from %s (its network, dT_ratio %.4g and theta scaler)" % (init_dir, cfg["scales"]["dT_ratio"]), flush=True)
     train = training_cases(cfg, domain)
     print("training cases: %d (%s)" % (len(train["params"]), train["source"]), flush=True)
     val_path = resolve_path(cfg["phase2"]["val_data"], ROOT)
@@ -130,7 +139,8 @@ def main():
 
     # theta normalization from the domain (a large Sobol sample plus the training cases), fixed for the run
     tc = cfg["theta_colloc"]
-    scaler = fit_theta_scaler(ThetaSampler(domain, seed=int(tc["seed"]) + 1000).draw(int(tc["scaler_n_theta"])) + train["params"], cfg)
+    scaler = pre_scaler or fit_theta_scaler(
+        ThetaSampler(domain, seed=int(tc["seed"]) + 1000).draw(int(tc["scaler_n_theta"])) + train["params"], cfg)
     with open(os.path.join(run_dir, "theta_scaler.json"), "w", encoding="utf-8") as f:
         json.dump(scaler.to_dict(), f)
 
@@ -151,6 +161,8 @@ def main():
                fields=[c.profiles for c in val_cases], seeds=[c.seed for c in val_cases])
 
     model = make_model(cfg, n_comp)
+    if init_dir:
+        model.load_weights(os.path.join(init_dir, "model.weights.h5"))
     curve_path = os.path.join(run_dir, "val_curve.csv")
 
     def periodic_eval(step):
@@ -174,6 +186,7 @@ def main():
     n_plots = int(cfg["phase2"]["n_plots"])
     summary = dict(
         mode="hybrid" if hybrid else "physics",
+        init_from=init_dir,
         domain=domain.describe(),
         validation=evaluate_set(model, cfg, scaler, dtype, val, os.path.join(run_dir, "eval_val"), n_plots),
         train_fit=evaluate_set(model, cfg, scaler, dtype, train, os.path.join(run_dir, "eval_train"), 2),
