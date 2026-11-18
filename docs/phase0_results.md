@@ -28,6 +28,13 @@ y_CO2/y_CO2,F. Field errors = RMSE of the dimensionless fields over a 101 × 201
 Run names in `runs/`: `phase0_adam20k`, `phase0_fwd_energy10`, `phase0_hybrid`, `phase0_hybrid_energy10`.
 The defaults in `configs/pinn_base.yaml` were updated to the settings of A and C.
 
+> **Note on B and C: they measure fit, not generalization.** The hybrid runs were trained on the
+> outlet curve (y_i and T) of this very case and are evaluated on the same curve, so their outlet
+> numbers only say how well the network reproduces data it has seen. Only the quantities that
+> were not in their data (outlet velocity, internal fields, mole-balance moment) say something
+> about the physics they learned. Generalization to unseen cases is measured in Phase 1, on
+> validation seeds that the PINN never sees.
+
 ## Outlet (PINN vs reference)
 
 | Run | y RMSE | y R² | T_out RMSE (K) | T_out R² | v_out/v_s RMSE | v_out R² | tb | t50 | ts |
@@ -37,8 +44,8 @@ The defaults in `configs/pinn_base.yaml` were updated to the settings of A and C
 | B, hybrid | 0.0003* | 1.000* | 0.002* | 1.000* | 0.0169 | 0.11 | +0.3 %* | 0.0 %* | +0.6 %* |
 | C, hybrid | 0.0005* | 1.000* | 0.005* | 1.000* | 0.0058 | 0.89 | −0.1 %* | 0.0 %* | +0.9 %* |
 
-\* B and C were trained on this same outlet curve: these numbers show the fit, not generalization.
-The outlet velocity and the internal fields were not in their data.
+\* B and C were trained on this same outlet curve: these numbers show the fit, not generalization
+(see the note above). The outlet velocity and the internal fields were not in their data.
 
 ## Internal fields (dimensionless RMSE; never in the data)
 
@@ -90,7 +97,8 @@ same horizon.
    to cancel the heat terms.
 4. **Outlet data plus physics gives the most accurate interior** (run C): field errors are about
    half of the forward run's. Outlet data alone with poorly balanced weights (B) gives a perfect
-   outlet and a worse interior.
+   outlet and a worse interior. B and C saw the outlet they are scored on, so this is a statement
+   about the interior (not seen) and not about predicting new cases.
 
 ## Open points for the advisor
 
