@@ -63,7 +63,9 @@ def field_errors(model, table, case_index, p, s, ref, ev, plot_path=None):
     pred_maps["v"] = pred["v"][:, 0].reshape(nt, nz)
     if plot_path is not None:
         plots.plot_fields(zg, tg, ref_maps, pred_maps, plot_path)
-    return {k: float(np.sqrt(np.mean((pred_maps[k] - ref_maps[k]) ** 2))) for k in ref_maps}
+    out = {k: float(np.sqrt(np.mean((pred_maps[k] - ref_maps[k]) ** 2))) for k in ref_maps}
+    out["T_K"] = out["T"] * s.dT_ref  # in kelvin: comparable between runs with different dT_ref
+    return out
 
 
 def _times(p, pred, ref, ev, names):

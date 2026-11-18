@@ -51,7 +51,8 @@ def test_evaluate_cases_reports_every_phase0_metric(tmp_path):
     per_case = res["per_case_mean_abs"]
     for name in ("tb", "t10", "t50", "t90", "ts"):
         assert name + "_c1_rel_err_pct" in per_case
-    for key in ("moment_c1_pinn_vs_ref_pct_tref", "moment_c0_pinn_vs_theory_pct_tref", "field_rmse_T", "field_rmse_q1"):
+    for key in ("moment_c1_pinn_vs_ref_pct_tref", "moment_c0_pinn_vs_theory_pct_tref", "field_rmse_T", "field_rmse_T_K",
+                "field_rmse_q1"):
         assert np.isfinite(per_case[key])
     assert res["inference_ms_per_curve"] > 0 and res["n_cases"] == 2
     with open(os.path.join(tmp_path, "per_case_metrics.csv"), encoding="utf-8") as f:
