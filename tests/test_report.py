@@ -3,6 +3,7 @@ import csv
 import os
 
 import numpy as np
+import tensorflow as tf
 
 from conftest import REPO_ROOT
 from nnads_ic2.config import load_config
@@ -39,6 +40,7 @@ def fake_reference(p, s, nt, nx, rng):
 
 
 def test_evaluate_cases_reports_every_phase0_metric(tmp_path):
+    tf.keras.utils.set_random_seed(0)
     cfg = small_cfg()
     cases = [p for _, p in sample_cases(range(40), cfg["cases"])[:2]]
     table, scales, _, _ = case_table(cases, cfg, "float32")

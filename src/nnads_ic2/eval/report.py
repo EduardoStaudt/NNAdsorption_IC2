@@ -119,6 +119,12 @@ def evaluate_case(model, table, case_index, p, s, ref, cfg, out_dir, names=None,
     return res
 
 
+def _finite_stat(values, fn):
+    """fn over the finite values; NaN when there are none (e.g. a level no case reached)."""
+    v = values[np.isfinite(values)]
+    return float(fn(v)) if v.size else float("nan")
+
+
 def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_dir, n_plots, fields=None):
     """Several cases (Phase 1 validation/holdout).
 
@@ -159,12 +165,12 @@ def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_di
         rows.append(row)
         if j < n_plots:
             plots.plot_outlet(ref, pred, names, os.path.join(out_dir, "outlet_case%03d.png" % k))
-    keys = [key for key in rows[0] if key != "case"]
+    cols = {key: np.array([r.get(key, np.nan) for r in rows], dtype=float) for key in rows[0] if key != "case"}
     res = dict(outlet={k: regression_metrics(np.concatenate(a), np.concatenate(b), ev["aard_min"]) for k, (a, b) in pooled.items()})
-    res["per_case_mean_abs"] = {key: float(np.nanmean(np.abs([r.get(key, np.nan) for r in rows]))) for key in keys}
-    res["per_case_max_abs"] = {key: float(np.nanmax(np.abs([r.get(key, np.nan) for r in rows]))) for key in keys}
-    res["per_case_mean"] = {key: float(np.nanmean([r.get(key, np.nan) for r in rows])) for key in keys}
-    res["per_case_n_finite"] = {key: int(np.sum(np.isfinite([r.get(key, np.nan) for r in rows]))) for key in keys}
+    res["per_case_mean_abs"] = {key: _finite_stat(np.abs(v), np.mean) for key, v in cols.items()}
+    res["per_case_max_abs"] = {key: _finite_stat(np.abs(v), np.max) for key, v in cols.items()}
+    res["per_case_mean"] = {key: _finite_stat(v, np.mean) for key, v in cols.items()}
+    res["per_case_n_finite"] = {key: int(np.isfinite(v).sum()) for key, v in cols.items()}
     res["inference_ms_per_curve"] = inference_ms(model, table, int(case_indices[0]), len(refs[0]["t"]), int(ev["inference_repeats"]))
     res["n_cases"] = len(rows)
     with open(os.path.join(out_dir, "per_case_metrics.csv"), "w", newline="", encoding="utf-8") as f:
