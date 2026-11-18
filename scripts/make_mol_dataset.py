@@ -89,9 +89,12 @@ def accepted_cases(cfg, seed_start, max_seeds, rejected):
 
 
 def git_version():
+    """Short commit hash, with -dirty if tracked files changed. autocrlf/fileMode: a Windows checkout
+    read from WSL would otherwise look modified (CRLF line ends, 777 file modes)."""
+    git = ["git", "-c", "core.autocrlf=true", "-c", "core.fileMode=false"]
     try:
-        rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        rev = subprocess.run(git + ["rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        dirty = subprocess.run(git + ["status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
         return rev + ("-dirty" if dirty else "")
     except OSError:
         return "unknown"
