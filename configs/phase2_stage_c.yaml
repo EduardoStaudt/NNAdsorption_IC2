@@ -1,0 +1,8 @@
+# Phase 2, stage (c): all 31 theta columns vary (whole IC1 domain).
+inherit: phase2_base.yaml
+
+domain:
+  mode: full
+
+logging:
+  run_name: phase2c
