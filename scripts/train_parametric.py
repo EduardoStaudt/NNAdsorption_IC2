@@ -22,12 +22,21 @@ from nnads_ic2.config import apply_overrides, load_config, resolve_path, save_co
 from nnads_ic2.data.loader import load_recorder_h5  # noqa: E402
 from nnads_ic2.data.sampling import CollocationPool  # noqa: E402
 from nnads_ic2.eval.report import evaluate_cases  # noqa: E402
-from nnads_ic2.experiment import case_table, make_model, outlet_data, profile_data  # noqa: E402
+from nnads_ic2.experiment import case_table, make_model, outlet_data, profile_data, resolve_dT_ratio  # noqa: E402
+from nnads_ic2.physics.scales import measured_temperature_rise  # noqa: E402
 from nnads_ic2.training.trainer import Trainer  # noqa: E402
 
 
 def reference(case):
     return dict(t=case.t, c_out=case.c_out, y_out=case.y_out, T_out=case.T_out, v_out=case.v_out)
+
+
+def data_temperatures(case, use_profiles):
+    """Temperatures of a training case that the PINN may see as data (outlet, plus profiles if enabled)."""
+    T = [case.T_out]
+    if use_profiles and case.profiles is not None:
+        T.append(case.profiles["T"].ravel())
+    return np.concatenate(T)
 
 
 def main():
@@ -50,7 +59,6 @@ def main():
     dtype = runtime.setup_tf(cfg["runtime"])
     run_dir = os.path.join(ROOT, cfg["logging"]["runs_dir"], run_name)
     os.makedirs(run_dir, exist_ok=True)
-    save_config(cfg, os.path.join(run_dir, "config.yaml"))
 
     ph = cfg["phase1"]
     n_comp = int(cfg["physics"]["n_comp"])
@@ -64,6 +72,13 @@ def main():
     train = [cases[i] for i in perm[:n_tr]]
     val = [cases[i] for i in perm[n_tr : n_tr + n_val]]
     print("device %s | %d training cases, %d validation cases from %s" % (runtime.device_name(), n_tr, n_val, cfg["data"]["path"]))
+
+    # dT_ref: median of (measured rise / feed estimate) over the training cases, applied to every
+    # case, so validation cases (no data at prediction time) follow the same rule as training cases
+    use_prof = bool(cfg["data"]["use_internal_profiles"])
+    resolve_dT_ratio(cfg, [c.params for c in train],
+                     [measured_temperature_rise(data_temperatures(c, use_prof), c.params.Tin) for c in train])
+    save_config(cfg, os.path.join(run_dir, "config.yaml"))
 
     # theta normalized with the training cases only; table rows: training cases, then validation cases
     _, _, _, scaler = case_table([c.params for c in train], cfg, dtype)

@@ -16,7 +16,7 @@ outputs are O(1), and the loss terms can only be balanced when every residual is
 | t | t̃ = t/t_ref | t_ref = max_i t_st,i | stoichiometric time of the slowest front, Eq. (7) |
 | c_i | c̃_i = c_i/C_F | C_F = P/(R T_in) | total gas concentration of the feed |
 | q̄_i | q̃_i = q̄_i/q_ref,i | q_ref,i = max(q*_i,F, q*_i,0, floor) | largest equilibrium loading the component can have |
-| T | T̃ = (T − T_in)/ΔT_ref | ΔT_ref = Σ_i y_i,F (−ΔH_i) q_ref,i ρ_b/(ρ_b C_p,s), floor 1 K | adiabatic temperature rise estimate |
+| T | T̃ = (T − T_in)/ΔT_ref | ΔT_ref = max(1 K, r ΔT_feed), ΔT_feed = Σ_i y_i,F (−ΔH_i) q_ref,i/C_p,s | size of the temperature change (see the note below) |
 | v | ṽ = v/v_s | v_s | feed superficial velocity |
 
 with the stoichiometric time (Eq. 7)
@@ -24,6 +24,18 @@ with the stoichiometric time (Eq. 7)
 $$t_{st,i} = \frac{L}{v_s}\left(\varepsilon_b + \rho_b \frac{q^*_{i,F}}{c_{i,F}}\right),\qquad c_{i,F} = y_{i,F}\,C_F .$$
 
 Notes:
+
+- Temperature scale. ΔT_feed is the heat the solid would release taking up the feed loading
+  with no losses, over its heat capacity. It ignores the heat carried away by the gas, the
+  cooling by desorption of the initial gas and the wall, so it can overestimate the real change
+  several times (Section 7: 33.6 K against a measured 4.85 K). When reference data exist,
+  r = (measured max|T − T_in|) / ΔT_feed:
+  - one case (Phase 0): ΔT_ref is the measured change itself;
+  - several cases (Phase 1): r is the median over the training cases, so ΔT_ref stays a
+    function of the case parameters alone and validation/holdout cases (no data at prediction
+    time) follow the same rule;
+  - no data: r = 1 (ΔT_feed), with a warning in the log.
+  The value of r is saved in the run's `config.yaml` (`scales.dT_ratio`).
 
 - q*_i,F is the loading in equilibrium with the feed and q*_i,0 the loading in equilibrium with
   the gas that fills the bed at t = 0. Taking the larger of the two gives the right scale to
@@ -186,7 +198,8 @@ it is a physics check of the predicted ṽ and c̃ that the MLP cannot provide
 | q*_0 (H2, CO2) | 0.6638, 0 mol/kg |
 | t_st (H2, CO2) | 39.58, 49.70 s |
 | t_ref, t_F | 49.70 s, 99.41 s |
-| ΔT_ref | 33.64 K |
+| ΔT_feed (old ΔT_ref) | 33.64 K |
+| measured max\|T − T_in\| (MOL, nx = 281) | 4.85 K (field), 4.25 K (outlet) |
 | α | 0.451 |
 | Pe | 623 |
 | Pe_T | 1165 |
@@ -195,9 +208,9 @@ it is a physics check of the predicted ṽ and c̃ that the MLP cannot provide
 | γ | 0.031, 0.040 |
 | θ | 0.068, 0.088 |
 | κ | 6.6e-5 |
-| H | 1.13, 0.84 |
+| H (with ΔT_feed) | 1.13, 0.84 |
 | St_w | 0.98 |
-| ε_T | 0.110 |
+| ε_T (with ΔT_feed) | 0.110 |
 
 High Pe and Pe_T mean sharp concentration and temperature fronts (the reason for the Fourier
 features and the residual-based sampling).

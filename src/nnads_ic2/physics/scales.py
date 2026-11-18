@@ -5,10 +5,16 @@ Dimensionless variables (a tilde in the docs, plain names in code):
     t~ = t / t_ref,             t_ref = max_i t_st,i   (stoichiometric time of the slowest front, Eq. 7)
     c~_i = c_i / C_F,           C_F = P / (R Tin)      (total gas concentration of the feed)
     q~_i = q_i / q_ref,i,       q_ref,i = max(q*_i at feed, q*_i at initial state, floor)
-    T~ = (T - Tin) / dT_ref,    dT_ref = sum_i y_i,F (-dH_i) q_ref,i rho_b / (rho_b Cps), with a floor
+    T~ = (T - Tin) / dT_ref,    dT_ref = max(floor, dT_ratio * feed estimate)   (see below)
     v~ = v / vs
 Using the larger of the feed and initial loadings for q_ref avoids a fixed "carrier" index:
 the gas that fills the bed at t = 0 gets its initial loading, the others their feed loading.
+
+Temperature scale. The feed estimate sum_i y_i,F (-dH_i) q_ref,i / Cps can overestimate the real
+rise several times (Phase 0: 33.6 K vs 4.8 K), which leaves T~ << 1. When reference data exist,
+dT_ratio = measured rise / feed estimate makes dT_ref the measured rise (one case) or rescales the
+estimate by the median ratio of the training cases (several cases), so dT_ref stays a function of
+theta alone and unseen cases get the same rule. Without data dT_ratio = 1: the feed estimate.
 """
 
 from dataclasses import dataclass
@@ -75,18 +81,62 @@ def initial_holdup_times(p):
     return out
 
 
-def compute_scales(p, q_ref_floor, dT_ref_floor, t_final_factor):
+def reference_loadings(p, q_ref_floor):
+    """q_ref,i = max(q*_i,F, q*_i,0, floor) [mol/kg]."""
+    st = feed_and_initial_state(p)
+    return np.maximum(np.maximum(st["q_feed"], st["q_init"]), q_ref_floor)
+
+
+def feed_temperature_rise(p, q_ref):
+    """Feed estimate of the temperature rise [K]: sum_i y_i,F (-dH_i) q_ref,i / Cps.
+
+    Heat the solid would release taking up the feed loading with no losses, over its heat
+    capacity. It ignores the heat carried away by the gas, the cooling by desorption of the
+    initial gas and the wall, so the real rise is often several times smaller.
+    """
+    return float(np.sum(p.y_feed * p.dH * q_ref) / p.Cps)
+
+
+def measured_temperature_rise(T, Tin):
+    """Largest |T - Tin| of a reference solution [K] (outlet curve or internal field).
+
+    The absolute value also gives a scale to a bed that mainly cools (desorption).
+    """
+    return float(np.nanmax(np.abs(np.asarray(T, dtype=float) - Tin)))
+
+
+def dT_ratio_from_data(cases, rises, q_ref_floor):
+    """dT_ratio = measured rise / feed estimate: its value for one case, the median for several.
+
+    `rises` holds the measured rise of each case (None: no data for that case). Returns None
+    when no case has data (the caller then falls back to the feed estimate and warns).
+    """
+    ratios = []
+    for p, rise in zip(cases, rises):
+        if rise is None or not np.isfinite(rise):
+            continue
+        est = feed_temperature_rise(p, reference_loadings(p, q_ref_floor))
+        if est > 0:
+            ratios.append(rise / est)
+    return float(np.median(ratios)) if ratios else None
+
+
+def compute_scales(p, q_ref_floor, dT_ref_floor, t_final_factor, dT_ratio=None):
+    """Reference scales of one case.
+
+    dT_ref = max(dT_ref_floor, dT_ratio * feed estimate); dT_ratio = None means 1 (feed estimate).
+    """
     st = feed_and_initial_state(p)
     t_ref = float(np.nanmax(stoich_times(p)))
-    q_ref = np.maximum(np.maximum(st["q_feed"], st["q_init"]), q_ref_floor)
-    dT_est = np.sum(p.y_feed * p.dH * q_ref) * p.rho_b / (p.rho_b * p.Cps)
+    q_ref = reference_loadings(p, q_ref_floor)
+    ratio = 1.0 if dT_ratio is None else float(dT_ratio)
     return Scales(
         L=p.L,
         t_ref=t_ref,
         t_final=t_final_factor * t_ref,
         C_F=float(st["C_F"]),
         q_ref=q_ref,
-        dT_ref=float(max(dT_est, dT_ref_floor)),
+        dT_ref=float(max(ratio * feed_temperature_rise(p, q_ref), dT_ref_floor)),
         vs=p.vs,
         Tin=p.Tin,
     )

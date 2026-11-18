@@ -5,11 +5,15 @@ import pytest
 
 from conftest import IC1_ROOT, REPO_ROOT
 from ic1_reference import load_ic1_module
+from nnads_ic2.experiment import resolve_dT_ratio
 from nnads_ic2.physics.params import CaseParams
 from nnads_ic2.physics.scales import (
     compute_scales,
     dimensionless_groups,
+    dT_ratio_from_data,
+    feed_temperature_rise,
     initial_holdup_times,
+    measured_temperature_rise,
     stoich_times,
     to_dimensional,
     to_dimless,
@@ -91,3 +95,42 @@ def test_floors(case):
     s3 = compute_scales(p3, **SCALE_CFG)
     assert s3.q_ref[2] == 1e-6
     assert np.isnan(stoich_times(p3)[2])
+
+
+def test_measured_rise_becomes_dT_ref(case):
+    s0 = compute_scales(case, **SCALE_CFG)  # no data: feed estimate
+    assert s0.dT_ref == pytest.approx(feed_temperature_rise(case, s0.q_ref))
+    rise = measured_temperature_rise(case.Tin + np.array([0.0, 2.0, 4.8, -1.0]), case.Tin)
+    assert rise == pytest.approx(4.8)
+    ratio = dT_ratio_from_data([case], [rise], SCALE_CFG["q_ref_floor"])
+    assert compute_scales(case, **SCALE_CFG, dT_ratio=ratio).dT_ref == pytest.approx(4.8, rel=1e-12)
+    # a rise below the floor gives dT_ref = 1 K
+    small = dT_ratio_from_data([case], [0.3], SCALE_CFG["q_ref_floor"])
+    assert compute_scales(case, **SCALE_CFG, dT_ratio=small).dT_ref == 1.0
+
+
+def test_cooling_counts_as_a_temperature_change():
+    assert measured_temperature_rise([300.0, 297.0, 301.0], 300.0) == pytest.approx(3.0)
+
+
+def test_dT_ratio_is_the_median_over_cases_with_data(case):
+    est = feed_temperature_rise(case, compute_scales(case, **SCALE_CFG).q_ref)
+    rises = [0.1 * est, 0.2 * est, None, 0.4 * est]
+    assert dT_ratio_from_data([case] * 4, rises, SCALE_CFG["q_ref_floor"]) == pytest.approx(0.2)
+    assert dT_ratio_from_data([case], [None], SCALE_CFG["q_ref_floor"]) is None
+
+
+def test_no_data_falls_back_to_the_feed_estimate_with_a_warning(case, capsys):
+    cfg = {"scales": dict(SCALE_CFG, dT_ratio=None)}
+    assert resolve_dT_ratio(cfg, [case], [None]) == 1.0
+    assert "WARNING" in capsys.readouterr().out
+    assert cfg["scales"]["dT_ratio"] == 1.0  # saved with the run config
+    cfg = {"scales": dict(SCALE_CFG, dT_ratio=0.25)}  # a fixed value is kept
+    assert resolve_dT_ratio(cfg, [case], [3.0]) == 0.25
+
+
+def test_example_rise_is_far_below_the_feed_estimate(example_case, mol_example):
+    # Phase 0 finding: the real rise (~5 K) is several times smaller than the feed estimate (33.6 K)
+    p, s = example_case
+    rise = measured_temperature_rise(mol_example["T"], p.Tin)
+    assert 1.0 < rise < 0.25 * s.dT_ref

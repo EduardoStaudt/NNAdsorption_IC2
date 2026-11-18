@@ -14,6 +14,10 @@ physics:
 scales:
   q_ref_floor: 1.0e-6     # mol/kg
   dT_ref_floor: 1.0       # K
+  # dT_ref = max(dT_ref_floor, dT_ratio * feed estimate), feed estimate = sum_i y_i,F (-dH_i) q_ref,i / Cps.
+  # null: dT_ratio = measured rise max|T - Tin| / feed estimate from the reference data (one case:
+  # dT_ref = measured rise; several: median ratio of the training cases). No data: 1 + warning.
+  dT_ratio: null
   t_final_factor: 2.0     # simulation horizon t_F = factor * t_ref (IC1/v23b: 2)
 
 theta:

@@ -9,7 +9,7 @@ from .models.pinn import PINN
 from .physics import mol_solver
 from .physics.params import CaseParams, ThetaScaler, theta_dim, theta_log_mask
 from .physics.residuals import case_arrays, stack_cases
-from .physics.scales import compute_scales, dimensionless_groups
+from .physics.scales import compute_scales, dT_ratio_from_data, dimensionless_groups
 
 
 def case_table(cases, cfg, dtype, scaler=None):
@@ -30,6 +30,29 @@ def case_table(cases, cfg, dtype, scaler=None):
         a["theta"] = th
         rows.append(a)
     return stack_cases(rows, dtype), scales, groups, scaler
+
+
+def resolve_dT_ratio(cfg, cases, rises):
+    """Set cfg["scales"]["dT_ratio"] from the measured temperature rises of the reference data.
+
+    A number already in the config is kept. Without data the feed estimate is used (ratio 1)
+    and a warning goes to the log. The resolved value is saved with the run's config.yaml, so a
+    re-evaluation rebuilds exactly the same scales.
+    """
+    sc = cfg["scales"]
+    if sc.get("dT_ratio") is not None:
+        print("dT_ref: dT_ratio = %.4g (fixed in the config)" % float(sc["dT_ratio"]), flush=True)
+        return float(sc["dT_ratio"])
+    ratio = dT_ratio_from_data(cases, rises, float(sc["q_ref_floor"]))
+    if ratio is None:
+        print("WARNING: no reference data for dT_ref -> fallback to the feed estimate "
+              "sum_i y_i,F (-dH_i) q_ref,i / Cps, which can overestimate the temperature rise several times", flush=True)
+        ratio = 1.0
+    else:
+        n = sum(r is not None for r in rises)
+        print("dT_ref: measured rise / feed estimate = %.4g (%s of %d case(s))" % (ratio, "median" if n > 1 else "value", n), flush=True)
+    sc["dT_ratio"] = float(ratio)
+    return float(ratio)
 
 
 def make_model(cfg, n_comp):

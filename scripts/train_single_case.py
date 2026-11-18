@@ -21,7 +21,15 @@ from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
 from nnads_ic2.config import apply_overrides, load_config, save_config  # noqa: E402
 from nnads_ic2.data.sampling import CollocationPool  # noqa: E402
 from nnads_ic2.eval.report import evaluate_case  # noqa: E402
-from nnads_ic2.experiment import case_table, make_model, outlet_data, reference_solution, single_case  # noqa: E402
+from nnads_ic2.experiment import (  # noqa: E402
+    case_table,
+    make_model,
+    outlet_data,
+    reference_solution,
+    resolve_dT_ratio,
+    single_case,
+)
+from nnads_ic2.physics.scales import compute_scales, measured_temperature_rise  # noqa: E402
 from nnads_ic2.training.trainer import Trainer  # noqa: E402
 
 COMPONENT_NAMES = ["H2", "CO2"]  # IC1 example case: [carrier, strong]
@@ -42,16 +50,17 @@ def main():
     dtype = runtime.setup_tf(cfg["runtime"])
     run_dir = os.path.join(ROOT, cfg["logging"]["runs_dir"], run_name)
     os.makedirs(run_dir, exist_ok=True)
-    save_config(cfg, os.path.join(run_dir, "config.yaml"))
     print("device: %s | dtype: %s | run: %s" % (runtime.device_name(), dtype, run_dir), flush=True)
 
-    # 1. case, scales, case table (normalized theta + constants of the residuals)
+    # 1. case and reference solution (t_F does not depend on dT_ref)
     p = single_case(cfg, ROOT)
+    sol = reference_solution(p, compute_scales(p, **cfg["scales"]), cfg, cfg["case"]["name"], ROOT)
+
+    # 2. dT_ref from the temperature rise of the reference field, then scales and case table
+    resolve_dT_ratio(cfg, [p], [measured_temperature_rise(sol["T"], p.Tin)])
+    save_config(cfg, os.path.join(run_dir, "config.yaml"))
     table, (s,), (groups,), _ = case_table([p], cfg, dtype)
     print("t_ref %.2f s | t_F %.2f s | dT_ref %.2f K | Pe %.0f | Da %s" % (s.t_ref, s.t_final, s.dT_ref, groups["Pe"], groups["Da"]))
-
-    # 2. reference solution
-    sol = reference_solution(p, s, cfg, cfg["case"]["name"], ROOT)
 
     # 3. model, collocation pool, data (only for the hybrid variant)
     model = make_model(cfg, p.n_comp)
@@ -85,7 +94,8 @@ def main():
         pool_size=pool.size,
     )
     summary["reference"] = dict(solver="MOL (physics/mol_solver.py)", **sol["info"])
-    summary["scales"] = dict(t_ref=s.t_ref, t_final=s.t_final, C_F=s.C_F, q_ref=s.q_ref.tolist(), dT_ref=s.dT_ref)
+    summary["scales"] = dict(t_ref=s.t_ref, t_final=s.t_final, C_F=s.C_F, q_ref=s.q_ref.tolist(), dT_ref=s.dT_ref,
+                             dT_ratio=float(cfg["scales"]["dT_ratio"]))
     with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, default=float)
     keys = ["outlet", "times", "mole_balance", "fields_rmse_dimless"]
