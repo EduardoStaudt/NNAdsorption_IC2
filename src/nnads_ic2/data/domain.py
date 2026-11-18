@@ -107,6 +107,19 @@ class Domain:
         ok, info = self.accept(p)
         return p, ok, info
 
+    def snap(self, p):
+        """Case with the fixed columns set back to the base case (subspace mode; else unchanged).
+
+        Datasets store theta in float32 (IC1 recorder), so a case read from a file differs from
+        the base case by round-off in the columns that should be identical.
+        """
+        if self.mode != "subspace":
+            return p
+        theta = p.to_theta()
+        fixed = [j for j in range(theta.size) if j not in set(self.cols)]
+        theta[fixed] = self.base.to_theta()[fixed]
+        return CaseParams.from_theta(theta, self.n_comp, carrier=self.carrier)
+
     def describe(self):
         return dict(mode=self.mode, base_case=self.base_path, vary=self.vary,
                     ranges={v: list(r) for v, r in zip(self.vary, self.ranges)})

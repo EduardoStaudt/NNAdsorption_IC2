@@ -82,3 +82,25 @@ def test_full_domain_sobol_keeps_ic1_component_order():
 def test_unknown_column_is_rejected():
     with pytest.raises(ValueError):
         Domain(subspace_cfg(["vs", "kL"]), REPO_ROOT)
+
+
+def test_snap_restores_the_fixed_columns_of_a_float32_copy():
+    dom = Domain(subspace_cfg(STAGE_A), REPO_ROOT)
+    p, _, _ = dom.sample(3)
+    stored = CaseParams.from_theta(p.to_theta().astype(np.float32).astype(np.float64), 2)  # as read from an h5 file
+    snapped = dom.snap(stored)
+    fixed = [j for j in range(31) if j not in dom.cols]
+    np.testing.assert_array_equal(snapped.to_theta()[fixed], dom.base.to_theta()[fixed])
+    np.testing.assert_allclose(snapped.to_theta()[dom.cols], p.to_theta()[dom.cols], rtol=1e-7)
+
+
+def test_scaler_treats_round_off_of_large_constant_columns_as_constant():
+    from nnads_ic2.experiment import fit_theta_scaler
+
+    dom = Domain(subspace_cfg(STAGE_A), REPO_ROOT)
+    cases = ThetaSampler(dom, seed=0).draw(4096)
+    sc = fit_theta_scaler(cases, CFG)
+    P = theta_names(2).index("P")
+    assert sc.sd[P] == pytest.approx(abs(sc.mu[P]))  # constant column: sd = |mu|, not its round-off
+    stored = dom.base.to_theta().astype(np.float32).astype(np.float64)
+    assert np.abs(sc.transform(stored[None, :])[0, P]) < 1e-6  # a float32 copy stays in distribution

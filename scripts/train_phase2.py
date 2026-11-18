@@ -148,7 +148,7 @@ def main():
 
     val_cases = load_recorder_h5(val_path, n_comp, carrier=int(cfg["data"]["carrier"]), use_internal_profiles=True,
                                  keys=cfg["data"].get("keys"))
-    val = dict(params=[c.params for c in val_cases], refs=[dataset_reference(c) for c in val_cases],
+    val = dict(params=[domain.snap(c.params) for c in val_cases], refs=[dataset_reference(c) for c in val_cases],
                fields=[c.profiles for c in val_cases], seeds=[c.seed for c in val_cases])
     n_plots = int(cfg["phase2"]["n_plots"])
     summary = dict(

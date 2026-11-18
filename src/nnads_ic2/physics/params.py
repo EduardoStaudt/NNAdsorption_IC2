@@ -309,11 +309,20 @@ class ThetaScaler:
 
     @classmethod
     def fit(cls, Theta, log_mask, sd_floor):
-        """Theta: [N, d]. Columns with sd < sd_floor (e.g. a single case) get sd = 1."""
+        """Theta: [N, d]. Constant columns (e.g. a single case, or the fixed columns of a subspace)
+        get sd = max(1, |mu|) instead of their round-off.
+
+        "Constant" is relative: sd < sd_floor max(1, |mu|). The mean of thousands of identical
+        pressures (~1e6 Pa) has a round-off of ~1e-7 Pa, far above an absolute floor; dividing
+        by it made a float32 copy of the same pressure look 2e5 standard deviations away
+        (Phase 2, docs/phase2_results.md). For |mu| <= 1 this is the IC1 rule (sd = 1).
+        """
         X = cls._log(np.atleast_2d(Theta), log_mask)
         mu = X.mean(axis=0)
         sd = X.std(axis=0)
-        sd[sd < sd_floor] = 1.0
+        scale = np.maximum(1.0, np.abs(mu))
+        const = sd < sd_floor * scale
+        sd[const] = scale[const]
         return cls(log_mask=np.asarray(log_mask, bool), mu=mu, sd=sd)
 
     def transform(self, Theta):

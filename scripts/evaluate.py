@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from nnads_ic2 import runtime  # noqa: E402  (must precede TensorFlow)
 from nnads_ic2.config import apply_overrides, load_config  # noqa: E402
+from nnads_ic2.data.domain import Domain  # noqa: E402
 from nnads_ic2.data.loader import load_recorder_h5  # noqa: E402
 from nnads_ic2.eval.report import evaluate_case, evaluate_cases  # noqa: E402
 from nnads_ic2.experiment import case_table, make_model, reference_solution, single_case  # noqa: E402
@@ -60,7 +61,9 @@ def main():
                 seeds = json.load(f)[args.split + "_seeds"]
             by_seed = {c.seed: c for c in cases}
             cases = [by_seed[sd] for sd in seeds]
-        params = [c.params for c in cases]
+        # subspace runs: fixed columns back to the base case values (the file stores float32)
+        domain = Domain(cfg, ROOT) if cfg.get("domain", {}).get("mode") == "subspace" else None
+        params = [domain.snap(c.params) if domain else c.params for c in cases]
         table, scales, _, _ = case_table(params, cfg, dtype, scaler=scaler)
         model = make_model(cfg, n_comp)
         model.load_weights(os.path.join(run_dir, "model.weights.h5"))
