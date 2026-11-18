@@ -1,0 +1,94 @@
+# Known limitations
+
+## 1. Flow reversal (v < 0) inside the bed: IC1 seed 21
+
+IC1 recorder seed 21 is a binary case from the stage (c) domain (whole domain). Its inlet
+temperature is Tin = 288.0 K and its final time is t_F = 2299.5 s. The IC1 prefilter passes it
+(severity 0.62). Phase 2 put it in the list of hard seeds (`cases.hard_seeds`, see
+[phase2_results.md](phase2_results.md)). It has no MOL reference, because the solver of this
+repository breaks at t = 85.7 s.
+
+![seed 21: PINN velocity field, lowest velocity and extreme temperatures in the bed](figures/limitations/flow_reversal_seed21.png)
+
+*Left: PINN v/v_s over (t, z/L); the dashed line is where the MOL stops. Middle: lowest velocity
+in the bed, PINN and MOL. Right: coldest and hottest point of the bed. The PINN is
+`runs/phase3c_long` (stage (c) physics, 200k steps, [phase3_results.md](phase3_results.md)). The
+MOL uses the dataset settings (BDF, 281 cells, van Leer) and stops at 85.5 s, just before the
+break; it is a diagnostic, not training data. Script: `scripts/plot_flow_reversal.py`; numbers
+in `figures/limitations/flow_reversal_seed21.json`.*
+
+### What the MOL solution does
+
+- **First seconds.** A cold zone and a hot zone form next to each other near the inlet. The
+  coldest point is 182.6 K at t = 2.5 s, z/L = 0.005. At 2 s the outlet velocity is 6.4 v_s,
+  because the bed releases gas. Cooling together with gas release points to desorption, but the
+  run does not check this.
+- **By 80 s.** The cold zone sits at z/L ≈ 0.14 (228 K) and the hot zone at z/L ≈ 0.10–0.11
+  (350 K).
+- **From 83 s.** The lowest velocity in the bed falls fast:
+
+| t (s) | lowest v/v_s | where (z/L) | outlet v/v_s | faces with v < 0 (z/L) |
+|---|---|---|---|---|
+| 80.0 | 0.543 | 0.135 | 0.993 | none |
+| 83.0 | 0.435 | 0.228 | 0.811 | none |
+| 84.0 | 0.044 | 0.285 | 0.391 | none |
+| 84.5 | −0.377 | 0.320 | −0.047 | 0.20–1.00 |
+| 85.0 | −1.069 | 0.359 | −0.759 | 0.19–1.00 |
+| 85.5 | −2.135 | 0.363 | −0.612 | 0.18–1.00 |
+
+- **From 84.5 s.** The flow points back toward the inlet over the downstream 80 % of the bed,
+  outlet included. Gas would enter the bed through the outlet.
+- **At 85.7 s the integration breaks.** At that point the lowest concentration is −4.3·10³ C_F
+  and the lowest velocity −3·10⁷ v_s (`data/provisorio_MOL_n2_hard_21_bdf_diag.json`).
+- **The dT/dt ↔ v fixed-point iteration is not the cause.** It still converges at 85 s: the
+  change of dT/dt is 3·10⁻¹¹ after 4 iterations, the same as at 20 s. The solution breaks
+  because the flow reverses.
+
+### Why this is outside the model as implemented
+
+- **Outlet condition.** The model assumes the gas flows from the inlet to the outlet. The outlet
+  condition (zero gradient, Danckwerts) holds only for outflow. With v(L) < 0, the model would
+  need the composition and temperature of the gas entering through the outlet, and it has
+  neither.
+- **MOL fluxes.** The convective fluxes take face values from the upstream (left) cell
+  (`MOLSolver.faces`). When v < 0 these become downwind values, which is unstable. This fits the
+  blow-up about 1 s after the reversal starts.
+- **No valid reference.** After about 84 s there is no valid reference for this case. Seed 21
+  is in no training or validation set.
+
+### What the PINN does
+
+- **No reversal.** v/v_s stays between 0.77 and 1.03 over the whole run. The network could
+  represent v < 0: its output v~ = 1 + z~ s N_v has no sign constraint.
+- **Almost no cooling, less heating.** The coldest point stays at 287.6 K (MOL: 182.6 K). The
+  hottest point is 309 K at 85 s (MOL: 353 K).
+- **The cooling happens before the hard initial condition releases.** It happens at
+  t = 2.5 s, i.e. t~ = 0.002. That is a fifth of the hard-IC time constant δ = 0.01, which is
+  11.5 s for this case. At that time the network outputs are still scaled by
+  s = 1 − exp(−t~/δ) ≈ 0.2. This may be part of why the PINN misses the transient; it was not
+  tested.
+- **The residual does not flag the case.** The table compares seed 21 with seven other cases of
+  the same model: validation seeds 71, 74, 80, 86 and 93, and hard seeds 38 and 62
+  (`runs/phase3c_long/predict_limitation/summary.json`).
+
+| | seed 21 | the 7 other cases |
+|---|---|---|
+| mean PDE residual, t~ < δ | 174 | 0.8–1900 |
+| mean PDE residual, t~ > δ | 0.013 | 0.007–0.039 |
+| PINN outlet v/v_s | 0.77–1.00 | 0.46–1.02 |
+| PINN outlet temperature rise | 12.7 K | 0.7–33.6 K |
+
+- **Nothing warns.** Neither the residual nor the IC1 prefilter flags the case. The PINN gives
+  a smooth, plausible-looking answer for a case where the model itself does not hold.
+
+### What follows
+
+- **Use.** PINN predictions for cases with strong heat effects near the inlet should be checked
+  with a short MOL run of the first ~100 s. For seed 21 the diagnostic run up to the break took
+  180 s and shows the reversal at 84.5 s.
+- **v23b.** When the v23b dataset arrives, check whether the v23b reference solver handles
+  backflow (an inflow condition at the outlet). If it does, the PINN outlet loss term needs the
+  same switch. Phase 3 does not change the model.
+- **Other cases.** No case of the MOL datasets reverses. The lowest v/v_s is 0.255 over the 60
+  Phase 1 cases, 0.311–0.775 over the three validation sets, and 0.548 for hard seed 38. Seed 62
+  (MOL over 3 h) was not checked. Nothing in the sampling rules out other reversing cases.
