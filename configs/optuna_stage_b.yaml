@@ -1,0 +1,23 @@
+# Optuna study on stage (b) (scripts/optuna_stage_b.py): the base of every trial. It is the best
+# stage (b) setup of the Phase 3 ablation (Sobol theta and the Cauchy loss, physics only) with short
+# runs: 15 000 steps, and the validation y R2 every 2 500 steps for the median pruner. Each trial
+# adds its sampled values with --set (network, Fourier features, activation, lr, energy weight,
+# Cauchy scale, number of theta). With no --set, a run is the current model.
+inherit: phase2_stage_b.yaml
+
+loss:
+  weights:
+    data: 0.0               # physics only
+  robust_c: 10.0            # Cauchy loss on
+
+train:
+  steps: 15000
+
+phase2:
+  eval_every: 2500          # intermediate values for the pruner (val_curve.csv)
+  n_plots: 0                # no outlet figures in the trials
+
+logging:
+  run_name: optuna_b
+  ckpt_every: 15000         # one checkpoint per run (disk: up to 60 trials)
+  keep_checkpoints: 1
