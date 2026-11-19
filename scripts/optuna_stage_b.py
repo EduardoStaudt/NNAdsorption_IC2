@@ -5,25 +5,33 @@ validation every 2 500 steps) and the sampled values as --set overrides. The val
 2 500 steps is reported to Optuna, and a median pruner stops a trial whose best value so far is below
 the median of the earlier trials at the same step. The objective is the final validation y R2: outlet
 mole fraction of gas 1, pooled over the 20 stage (b) validation cases, the metric of the phase reports.
+The mean and the lowest R2 of the single cases are kept too (report and confirm), not optimized.
 
-The study is stored in SQLite (runs/<name>/study.db), so it can be paused and resumed. This process
-does not import TensorFlow and holds no GPU memory: it starts the training processes one at a time
-and reads their val_curve.csv and summary.json.
+Several trials can train at the same time on the GPU: `run --workers N` starts N worker processes on
+the same study, each with its own sampler seed, so that they do not propose the same trial. Every
+trial has its own run directory and the usual training seeds, so its result depends only on its
+hyperparameters, not on the worker or on N. Each training process gets a fixed share of the GPU
+memory (--gpu-mem-mb, i.e. runtime.gpu_memory_mb; 3072 MB fits the largest network of the space).
+
+The study is stored in SQLite (runs/<name>/study.db) or, with --storage journal, in an Optuna journal
+file (runs/<name>/study.log), so it can be paused and resumed. The study processes do not import
+TensorFlow and hold no GPU memory: they start the training processes and read their val_curve.csv
+and summary.json.
 
 Commands, from the repository root inside WSL (~/ic2env/bin/python):
-    python scripts/optuna_stage_b.py run --n-trials 30   start, or resume until 30 trials are finished
-    python scripts/optuna_stage_b.py report              table of the trials
-    python scripts/optuna_stage_b.py confirm             the top 3 trials and the current model, 2 seeds
-                                                         each, 50 000 steps; if the best of the 3 beats
-                                                         the current model, both go to stage (c) with
-                                                         2 seeds each, 50 000 steps
+    python scripts/optuna_stage_b.py run --n-trials 60 --workers 3   start, or resume until 60 trials
+    python scripts/optuna_stage_b.py report [--importance]            table of the trials
+    python scripts/optuna_stage_b.py confirm --workers 3              the top 3 trials and the current
+        model, 2 seeds each, 50 000 steps; if the best of the 3 beats the current model, both go to
+        stage (c) with 2 seeds each, 50 000 steps
 
-Pause: create runs/<name>/STOP. The running trial finishes, then the study stops. Delete the file and
-run the same command again to resume. If this process is killed, its training process gets SIGTERM.
-The trial stays "running" in the database until its heartbeat is 3 minutes old, then it is marked
-failed and queued again (once).
+Pause: create runs/<name>/STOP. Each worker finishes its running trial, then stops. Delete the file
+and run the same command again to resume. If a study process is killed, its training processes get
+SIGTERM. With SQLite such a trial stays "running" until its heartbeat is 3 minutes old, then it is
+marked failed and queued again (once). The journal storage has no heartbeat.
 """
 import argparse
+import concurrent.futures
 import csv
 import json
 import math
@@ -39,6 +47,7 @@ from optuna.trial import TrialState
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+TRAIN_SCRIPT = os.path.join(ROOT, "scripts", "train_phase2.py")
 CONFIG_B = "configs/optuna_stage_b.yaml"
 CONFIG_C = "configs/phase2_stage_c.yaml"
 VAL_B = "data/provisorio_MOL_n2_stage_b_val20.h5"
@@ -47,7 +56,11 @@ N_FIXED = {"b": 1, "c": 50}  # fixed collocation theta: the base case (b), the 5
 STUDY_NAME = "stage_b"
 SEEDS = (0, 1)
 TOP = 3
+GPU_MEM_MB = 3072  # largest network of the space (8 x 256, SiLU, 128 Fourier features, 4096 theta): peak 2.6 GB
 FINISHED = (TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL)
+BUSY = FINISHED + (TrialState.RUNNING,)  # counted against --n-trials, so that parallel workers do not overshoot
+NAN = float("nan")
+FAILED_RUN = dict(y_r2=NAN, y_r2_case_mean=NAN, y_r2_case_min=NAN, worst_case=None)
 
 # The current model (as phase3c_long): the first trial of the study and the baseline of `confirm`.
 CURRENT = dict(depth=6, width=128, activation="tanh", n_fourier=64, fourier_scale=1.0, lr=1.0e-3,
@@ -126,9 +139,16 @@ def overrides(p, n_fixed):
     return sets
 
 
-def train_command(config, val, run_name, sets):
-    return [sys.executable, os.path.join(ROOT, "scripts", "train_phase2.py"), "--config", config,
-            "--val", val, "--run-name", run_name, "--set", *sets]
+def common_sets(args):
+    """Overrides of every run of the study: where it writes, and its GPU memory."""
+    sets = ["logging.runs_dir=%s" % args.runs_dir]
+    if args.gpu_mem_mb > 0:
+        sets.append("runtime.gpu_memory_mb=%d" % args.gpu_mem_mb)
+    return sets
+
+
+def train_command(args, config, val, run_name, sets):
+    return [sys.executable, args.train_script, "--config", config, "--val", val, "--run-name", run_name, "--set", *sets]
 
 
 def read_rows(path):
@@ -144,9 +164,21 @@ def read_rows(path):
     return list(csv.DictReader(lines))
 
 
+def as_float(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return NAN
+
+
 def _die_with_parent():
-    """Runs in the child before exec: it gets SIGTERM when this process dies (no orphan GPU run)."""
+    """Runs in the child before exec: it gets SIGTERM when its parent dies (no orphan GPU run)."""
     _PRCTL(1, signal.SIGTERM)  # 1 = PR_SET_PDEATHSIG
+
+
+def start(cmd, log):
+    return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=ROOT,
+                            preexec_fn=_die_with_parent if _PRCTL else None)
 
 
 def stop_process(proc, wait_s=60.0):
@@ -168,18 +200,17 @@ def fresh_dir(path):
 
 
 def run_and_watch(cmd, log_path, curve_path, on_eval, poll_s):
-    """Run one training process; call on_eval(step, y_r2) for each new row of its validation curve.
+    """Run one training process; call on_eval(row) for each new row of its validation curve.
     on_eval returns True to stop the run. Returns 'stopped', 'done' or 'failed'."""
     seen = 0
     with open(log_path, "w", encoding="utf-8") as log:
-        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=ROOT,
-                                preexec_fn=_die_with_parent if _PRCTL else None)
+        proc = start(cmd, log)
         try:
             while True:
                 finished = proc.poll() is not None
                 for row in read_rows(curve_path)[seen:]:
                     seen += 1
-                    if on_eval(int(row["step"]), float(row["y_c1_r2"])):
+                    if on_eval(row):
                         stop_process(proc)
                         return "stopped"
                 if finished:
@@ -191,12 +222,18 @@ def run_and_watch(cmd, log_path, curve_path, on_eval, poll_s):
 
 
 def run_result(run_dir):
-    """Validation y R2 of a finished run, and a few other numbers of its summary.json."""
+    """Metrics of a finished run from its summary.json."""
     with open(os.path.join(run_dir, "summary.json"), encoding="utf-8") as f:
         s = json.load(f)
-    out = s["validation"]["outlet"]
-    return float(out["y_c1"]["r2"]), dict(T_out_rmse=out["T_out"]["rmse"],
-                                          median_ms_per_step=s["training"].get("median_ms_per_step"))
+    v, t = s["validation"], s.get("training", {})
+    return dict(y_r2=float(v["outlet"]["y_c1"]["r2"]),
+                y_r2_case_mean=as_float(v.get("per_case_mean", {}).get("r2_y_c1")),
+                y_r2_case_min=as_float(v.get("per_case_min", {}).get("r2_y_c1")),
+                worst_case=v.get("worst_case", {}).get("y_c1", {}).get("case"),
+                T_out_rmse=as_float(v["outlet"].get("T_out", {}).get("rmse")),
+                median_ms_per_step=t.get("median_ms_per_step"),
+                gpu_peak_mb=t.get("gpu_peak_mb"),
+                host_peak_rss_mb=t.get("host_peak_rss_mb"))
 
 
 def train_seconds(run_dir):
@@ -217,11 +254,13 @@ def make_objective(args):
         run_dir = os.path.join(args.runs_dir, run_name)
         fresh_dir(run_dir)
         trial.set_user_attr("run_name", run_name)
-        sets = overrides(p, N_FIXED["b"]) + ["train.steps=%d" % args.steps, "phase2.eval_every=%d" % args.eval_every,
-                                             "logging.runs_dir=%s" % args.runs_dir]
-        diverged = []
+        trial.set_user_attr("worker", args.worker_id)
+        sets = overrides(p, N_FIXED["b"]) + ["train.steps=%d" % args.steps, "phase2.eval_every=%d" % args.eval_every]
+        last, diverged = {}, []
 
-        def on_eval(step, r2):
+        def on_eval(row):
+            step, r2 = int(row["step"]), as_float(row["y_c1_r2"])
+            last.update(row)
             if not math.isfinite(r2):
                 diverged.append(step)
                 return True
@@ -230,11 +269,15 @@ def make_objective(args):
 
         t0 = time.time()
         try:
-            status = run_and_watch(train_command(CONFIG_B, VAL_B, run_name, sets), os.path.join(run_dir, "stdout.txt"),
-                                   os.path.join(run_dir, "val_curve.csv"), on_eval, args.poll_s)
+            status = run_and_watch(train_command(args, CONFIG_B, VAL_B, run_name, sets + common_sets(args)),
+                                   os.path.join(run_dir, "stdout.txt"), os.path.join(run_dir, "val_curve.csv"),
+                                   on_eval, args.poll_s)
         finally:
             trial.set_user_attr("wall_s", time.time() - t0)
             trial.set_user_attr("train_s", train_seconds(run_dir))
+        if last:  # single-case metrics of the last validation (all a pruned trial has)
+            trial.set_user_attr("y_r2_case_mean", as_float(last.get("y_c1_r2_case_mean")))
+            trial.set_user_attr("y_r2_case_min", as_float(last.get("y_c1_r2_case_min")))
         if diverged:
             raise failed(trial, "non-finite validation y R2 at step %d" % diverged[0])
         if status == "stopped":
@@ -242,29 +285,38 @@ def make_objective(args):
         if status == "failed":
             raise failed(trial, "the training process failed, see %s/stdout.txt" % run_name)
         try:
-            value, extra = run_result(run_dir)
-        except (OSError, KeyError, ValueError) as e:
+            res = run_result(run_dir)
+        except (OSError, KeyError, ValueError, TypeError) as e:
             raise failed(trial, "no result in %s/summary.json (%r)" % (run_name, e))
-        for k, v in extra.items():
-            trial.set_user_attr(k, v)
-        if not math.isfinite(value):
+        for k, v in res.items():
+            if k != "y_r2":
+                trial.set_user_attr(k, v)
+        if not math.isfinite(res["y_r2"]):
             raise failed(trial, "non-finite validation y R2")
-        return value
+        return res["y_r2"]
 
     return objective
 
 
-def open_study(args):
+def make_storage(args):
     study_dir = os.path.join(args.runs_dir, args.name)
     os.makedirs(study_dir, exist_ok=True)
-    storage = optuna.storages.RDBStorage(
+    if args.storage == "journal":
+        path = os.path.join(study_dir, "study.log")
+        lock = optuna.storages.journal.JournalFileOpenLock(path)
+        return optuna.storages.JournalStorage(optuna.storages.journal.JournalFileBackend(path, lock_obj=lock))
+    return optuna.storages.RDBStorage(
         "sqlite:///" + os.path.join(study_dir, "study.db"),
+        engine_kwargs=dict(connect_args=dict(timeout=60)),  # wait up to 60 s for a lock held by another worker
         heartbeat_interval=60, grace_period=180,
         heartbeat_stale_trial_callback=optuna.storages.RetryHeartbeatStaleTrialCallback(max_retry=1),
     )
+
+
+def open_study(args, seed=0):
     return optuna.create_study(
-        study_name=STUDY_NAME, storage=storage, direction="maximize", load_if_exists=True,
-        sampler=optuna.samplers.TPESampler(seed=0, multivariate=True, group=True),
+        study_name=STUDY_NAME, storage=make_storage(args), direction="maximize", load_if_exists=True,
+        sampler=optuna.samplers.TPESampler(seed=seed, multivariate=True, group=True, constant_liar=True),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2 * args.eval_every),
     )
 
@@ -272,7 +324,7 @@ def open_study(args):
 def stop_file_callback(path):
     def callback(study, trial):
         if os.path.exists(path):
-            print("%s found: the study stops after trial %d" % (path, trial.number), flush=True)
+            print("%s found: this worker stops after trial %d" % (path, trial.number), flush=True)
             study.stop()
 
     return callback
@@ -287,45 +339,85 @@ def fmt_params(p):
 
 def _last_report(t):
     step = max(t.intermediate_values, default=0)
-    return step, t.intermediate_values.get(step, float("nan"))
+    return step, t.intermediate_values.get(step, NAN)
 
 
-def print_report(study, top=None):
+def elapsed_hours(trials):
+    """Hours from the first start to the last end of the finished trials (pauses included)."""
+    done = [t for t in trials if t.datetime_start and t.datetime_complete]
+    if not done:
+        return 0.0
+    return (max(t.datetime_complete for t in done) - min(t.datetime_start for t in done)).total_seconds() / 3600
+
+
+def print_report(study, top=None, importance=False):
     trials = study.get_trials(deepcopy=False)
     counts = ", ".join("%s %d" % (s.name.lower(), n) for s in TrialState if (n := sum(t.state == s for t in trials)))
-    print("study %s: %s | wall time %.2f h" % (study.study_name, counts or "no trials",
-                                               sum(t.user_attrs.get("wall_s", 0.0) for t in trials) / 3600))
+    print("study %s: %s | sum of trial times %.2f h, elapsed %.2f h" % (
+        study.study_name, counts or "no trials", sum(t.user_attrs.get("wall_s", 0.0) for t in trials) / 3600,
+        elapsed_hours(trials)))
     done = sorted((t for t in trials if t.state == TrialState.COMPLETE), key=lambda t: t.value, reverse=True)
     pruned = sorted((t for t in trials if t.state == TrialState.PRUNED), key=_last_report, reverse=True)
-    print("| trial | state | y R2 | at step | min | parameters |\n|---|---|---|---|---|---|")
+    print("| trial | state | y R2 | case mean | worst case (case) | at step | min | worker | parameters |\n"
+          "|---|---|---|---|---|---|---|---|---|")
     for t in (done + pruned)[:top]:
         step, r2 = _last_report(t)
-        print("| %d%s | %s | %.4f | %d | %.1f | %s |" % (
+        ua = t.user_attrs
+        print("| %d%s | %s | %.4f | %.4f | %.4f (%s) | %d | %.1f | %s | %s |" % (
             t.number, " (current)" if same_as_current(t.params) else "", t.state.name.lower(),
-            t.value if t.state == TrialState.COMPLETE else r2, step, t.user_attrs.get("wall_s", 0.0) / 60,
-            fmt_params(t.params)))
+            t.value if t.state == TrialState.COMPLETE else r2, ua.get("y_r2_case_mean", NAN),
+            ua.get("y_r2_case_min", NAN), ua.get("worst_case", "-"), step, ua.get("wall_s", 0.0) / 60,
+            ua.get("worker", "-"), fmt_params(t.params)))
     for t in trials:
         if t.state == TrialState.FAIL:
             print("failed trial %d: %s" % (t.number, t.user_attrs.get("error", "see the log")))
+    if importance:
+        imp = optuna.importance.get_param_importances(
+            study, evaluator=optuna.importance.FanovaImportanceEvaluator(seed=0))
+        print("importance (fANOVA over the complete trials): " + ", ".join("%s %.3f" % kv for kv in imp.items()))
+
+
+def worker_command(args, i):
+    return [sys.executable, os.path.abspath(__file__), "worker", "--worker-id", str(i), "--name", args.name,
+            "--runs-dir", args.runs_dir, "--storage", args.storage, "--eval-every", str(args.eval_every),
+            "--poll-s", str(args.poll_s), "--gpu-mem-mb", str(args.gpu_mem_mb), "--train-script", args.train_script,
+            "--n-trials", str(args.n_trials), "--steps", str(args.steps)]
 
 
 def cmd_run(args):
+    """Start (or resume) the study with args.workers worker processes and wait for them."""
     study = open_study(args)
-    stop_path = os.path.join(args.runs_dir, args.name, "STOP")
+    study_dir = os.path.join(args.runs_dir, args.name)
+    stop_path = os.path.join(study_dir, "STOP")
     if os.path.exists(stop_path):
         sys.exit("%s exists: delete it to run the study" % stop_path)
+    optuna.storages.fail_stale_trials(study)  # trials left running by killed workers (SQLite only)
     if not study.trials:
         study.enqueue_trial(dict(CURRENT))  # the current model first: a reference for the pruner
-    if len(study.get_trials(deepcopy=False, states=FINISHED)) < args.n_trials:
-        study.optimize(make_objective(args), catch=(RuntimeError,),
-                       callbacks=[optuna.study.MaxTrialsCallback(args.n_trials, states=FINISHED),
-                                  stop_file_callback(stop_path)])
+    n = min(args.workers, args.n_trials - len(study.get_trials(deepcopy=False, states=BUSY)))
+    procs = []
+    for i in range(max(n, 0)):
+        log = open(os.path.join(study_dir, "worker%d.out" % i), "a", encoding="utf-8")
+        procs.append((start(worker_command(args, i), log), log))
+    for proc, log in procs:
+        proc.wait()
+        log.close()
     print_report(study, top=10)
+
+
+def cmd_worker(args):
+    """One worker: trials until the study has args.n_trials (running ones included) or STOP exists."""
+    study = open_study(args, seed=args.worker_id)
+    stop_path = os.path.join(args.runs_dir, args.name, "STOP")
+    if os.path.exists(stop_path) or len(study.get_trials(deepcopy=False, states=BUSY)) >= args.n_trials:
+        return
+    study.optimize(make_objective(args), catch=(RuntimeError,),
+                   callbacks=[optuna.study.MaxTrialsCallback(args.n_trials, states=BUSY), stop_file_callback(stop_path)])
 
 
 def run_once(args, stage, label, p, seed):
     """One confirmation run (args.confirm_steps steps, physics only). A run whose summary.json exists
-    is not trained again, so `confirm` can be resumed. Returns its validation y R2 (NaN if it failed)."""
+    is not trained again, so `confirm` can be resumed. Returns its metrics (NaN if it failed)."""
     config, val = (CONFIG_B, VAL_B) if stage == "b" else (CONFIG_C, VAL_C)
     run_name = "%s/confirm_%s/%s_seed%d" % (args.name, stage, label, seed)
     run_dir = os.path.join(args.runs_dir, run_name)
@@ -333,16 +425,27 @@ def run_once(args, stage, label, p, seed):
         fresh_dir(run_dir)
         sets = overrides(p, N_FIXED[stage]) + [
             "train.steps=%d" % args.confirm_steps, "phase2.eval_every=%d" % (args.confirm_steps // 5),
-            "loss.weights.data=0.0", "runtime.seed=%d" % seed, "logging.runs_dir=%s" % args.runs_dir]
+            "loss.weights.data=0.0", "runtime.seed=%d" % seed] + common_sets(args)
         print("%s stage (%s), %s, seed %d: %s" % (time.strftime("%H:%M:%S"), stage, label, seed, fmt_params(p)), flush=True)
-        status = run_and_watch(train_command(config, val, run_name, sets), os.path.join(run_dir, "stdout.txt"),
-                               os.path.join(run_dir, "val_curve.csv"), lambda step, r2: False, args.poll_s)
+        status = run_and_watch(train_command(args, config, val, run_name, sets), os.path.join(run_dir, "stdout.txt"),
+                               os.path.join(run_dir, "val_curve.csv"), lambda row: False, args.poll_s)
         if status != "done":
-            return float("nan")
+            return dict(FAILED_RUN)
     try:
-        return run_result(run_dir)[0]
-    except (OSError, KeyError, ValueError):
-        return float("nan")
+        return run_result(run_dir)
+    except (OSError, KeyError, ValueError, TypeError):
+        return dict(FAILED_RUN)
+
+
+def run_many(args, stage, labelled):
+    """run_once for every (label, params) and seed, args.workers runs at a time: {label: [result per seed]}."""
+    jobs = [(label, p, seed) for label, p in labelled for seed in SEEDS]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+        results = list(ex.map(lambda job: run_once(args, stage, *job), jobs))
+    out = {}
+    for (label, _, _), r in zip(jobs, results):
+        out.setdefault(label, []).append(r)
+    return out
 
 
 def mean_or_minus_inf(values):
@@ -358,6 +461,22 @@ def decide(y_r2):
     return best, bool(mean[best] > mean["current"])
 
 
+def print_confirm(res):
+    def pm(values):
+        return "%.4f +/- %.4f" % (statistics.fmean(values), abs(values[0] - values[-1]))
+
+    print("| stage | setup | y R2 per seed | mean +/- seed difference | case mean | worst case | parameters |\n"
+          "|---|---|---|---|---|---|---|")
+    for stage in ("stage_b", "stage_c"):
+        for label, v in res[stage].items():
+            runs = v["runs"]
+            print("| %s | %s | %s | %s | %s | %s | %s |" % (
+                stage[-1], label, " / ".join("%.4f" % r["y_r2"] for r in runs), pm([r["y_r2"] for r in runs]),
+                pm([r["y_r2_case_mean"] for r in runs]), pm([r["y_r2_case_min"] for r in runs]), fmt_params(v["params"])))
+    d = res["decision"]
+    print("best of the top %d: %s | stage (c) test: %s" % (TOP, d["best"], "yes" if d["stage_c"] else "no"))
+
+
 def cmd_confirm(args):
     study = open_study(args)
     done = sorted(study.get_trials(deepcopy=False, states=(TrialState.COMPLETE,)), key=lambda t: t.value, reverse=True)
@@ -365,47 +484,59 @@ def cmd_confirm(args):
     if not top:
         sys.exit("no complete trial other than the current model")
     out_path = os.path.join(args.runs_dir, args.name, "confirm.json")
-    res = dict(steps=args.confirm_steps, seeds=list(SEEDS), stage_b={}, stage_c={})
+    res = dict(steps=args.confirm_steps, seeds=list(SEEDS), workers=args.workers, stage_b={}, stage_c={})
 
     def save():
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(res, f, indent=2)
 
-    for label, p in [("current", dict(CURRENT))] + [("t%04d" % t.number, full_params(t.params)) for t in top]:
-        res["stage_b"][label] = dict(params=p, y_r2=[run_once(args, "b", label, p, s) for s in SEEDS])
-        save()
+    labelled = [("current", dict(CURRENT))] + [("t%04d" % t.number, full_params(t.params)) for t in top]
+    t0 = time.time()
+    runs = run_many(args, "b", labelled)
+    res["stage_b"] = {label: dict(params=p, y_r2=[r["y_r2"] for r in runs[label]], runs=runs[label]) for label, p in labelled}
+    res["stage_b_wall_s"] = time.time() - t0
     best, go = decide({k: v["y_r2"] for k, v in res["stage_b"].items()})
     res["decision"] = dict(best=best, stage_c=go)
     save()
     if go:
-        for label in ("current", best):
-            p = res["stage_b"][label]["params"]
-            res["stage_c"][label] = dict(params=p, y_r2=[run_once(args, "c", label, p, s) for s in SEEDS])
-            save()
-    for stage in ("stage_b", "stage_c"):
-        for label, v in res[stage].items():
-            print("%s %-8s y R2 %s, mean %.4f | %s" % (stage, label, " ".join("%.4f" % x for x in v["y_r2"]),
-                                                       statistics.fmean(v["y_r2"]), fmt_params(v["params"])))
-    print("best of the top %d: %s | stage (c) test: %s" % (TOP, best, "yes" if go else "no"))
+        labelled = [(label, res["stage_b"][label]["params"]) for label in ("current", best)]
+        t0 = time.time()
+        runs = run_many(args, "c", labelled)
+        res["stage_c"] = {label: dict(params=p, y_r2=[r["y_r2"] for r in runs[label]], runs=runs[label]) for label, p in labelled}
+        res["stage_c_wall_s"] = time.time() - t0
+        save()
+    print_confirm(res)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Optuna study of the stage (b) hyperparameters (see the module docstring).")
     sub = ap.add_subparsers(dest="command", required=True)
-    for name in ("run", "report", "confirm"):
+    for name in ("run", "worker", "report", "confirm"):
         sp = sub.add_parser(name)
         sp.add_argument("--name", default="optuna_b", help="study directory under the runs directory")
         sp.add_argument("--runs-dir", default=os.path.join(ROOT, "runs"))
+        sp.add_argument("--storage", choices=("sqlite", "journal"), default="sqlite")
         sp.add_argument("--eval-every", type=int, default=2500, help="steps between validations (pruner)")
         sp.add_argument("--poll-s", type=float, default=2.0, help="seconds between reads of the validation curve")
-        if name == "run":
+        sp.add_argument("--gpu-mem-mb", type=int, default=GPU_MEM_MB, help="GPU memory of each training process (0: as needed)")
+        sp.add_argument("--train-script", default=TRAIN_SCRIPT, help=argparse.SUPPRESS)  # tests: a stand-in trainer
+        if name in ("run", "worker"):
             sp.add_argument("--n-trials", type=int, required=True, help="finished trials to reach")
             sp.add_argument("--steps", type=int, default=15000, help="training steps per trial")
+        if name in ("run", "confirm"):
+            sp.add_argument("--workers", type=int, default=1, help="training processes at the same time on the GPU")
+        if name == "worker":
+            sp.add_argument("--worker-id", type=int, required=True, help="also the seed of its sampler")
         if name == "confirm":
             sp.add_argument("--confirm-steps", type=int, default=50000)
+        if name == "report":
+            sp.add_argument("--importance", action="store_true", help="parameter importance (fANOVA)")
     args = ap.parse_args(argv)
     args.runs_dir = os.path.abspath(args.runs_dir)
-    dict(run=cmd_run, report=lambda a: print_report(open_study(a)), confirm=cmd_confirm)[args.command](args)
+    args.train_script = os.path.abspath(args.train_script)
+    commands = dict(run=cmd_run, worker=cmd_worker, confirm=cmd_confirm,
+                    report=lambda a: print_report(open_study(a), importance=a.importance))
+    commands[args.command](args)
 
 
 if __name__ == "__main__":
