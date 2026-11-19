@@ -66,6 +66,24 @@ def test_concentrations_and_loadings_are_non_negative(floatx):
     assert out["c"].numpy().min() >= 0.0 and out["q"].numpy().min() >= 0.0
 
 
+@pytest.mark.parametrize("activation, n_features", [("silu", 16), ("tanh", 0)])
+def test_silu_and_no_fourier_features_give_finite_second_derivatives(activation, n_features):
+    """Options of the Optuna search space: SiLU instead of tanh, and no Fourier features. The PDE
+    residuals need d2/dz2 of the outputs, so it must exist and be finite."""
+    n = 2
+    cfg = dict(MODEL_CFG, activation=activation, fourier=dict(MODEL_CFG["fourier"], n_features=n_features))
+    model = PINN(n, theta_dim(n), cfg, t_final=2.0).build_with_dummy()
+    inp = make_inputs(np.random.default_rng(4), n, theta_dim(n), 128, "float32")
+    with tf.GradientTape() as outer:
+        outer.watch(inp["z"])
+        with tf.GradientTape() as inner:
+            inner.watch(inp["z"])
+            c = model(inp)["c"][:, :1]
+        dc_dz = inner.gradient(c, inp["z"])
+    d2c_dz2 = outer.gradient(dc_dz, inp["z"]).numpy()
+    assert np.all(np.isfinite(d2c_dz2)) and np.abs(d2c_dz2).max() > 0.0
+
+
 def test_two_domains_is_a_later_step():
     with pytest.raises(NotImplementedError):
         PINN(2, theta_dim(2), MODEL_CFG, t_final=2.0, domains=[Domain(0.0, 0.5), Domain(0.5, 1.0)])
