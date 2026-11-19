@@ -3,6 +3,7 @@ import csv
 import os
 
 import numpy as np
+import pytest
 import tensorflow as tf
 
 from conftest import REPO_ROOT
@@ -59,13 +60,30 @@ def test_evaluate_cases_reports_every_phase0_metric(tmp_path):
         assert np.isfinite(per_case[key])
     assert res["inference_ms_per_curve"] > 0 and res["n_cases"] == 2
     with open(os.path.join(tmp_path, "per_case_metrics.csv"), encoding="utf-8") as f:
-        assert len(list(csv.DictReader(f))) == 2
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 2
+    r2 = [float(r["r2_y_c1"]) for r in rows]  # R2 of each single case
+    assert res["worst_case"]["y_c1"] == dict(case=int(rows[int(np.argmin(r2))]["case"]), r2=pytest.approx(min(r2)))
     assert os.path.exists(os.path.join(tmp_path, "fields_case000.png"))
     assert not os.path.exists(os.path.join(tmp_path, "fields_case001.png"))  # only n_plots figures
     row = flat_metrics(res)  # one row of the validation curve (train_phase2.py)
     assert row["y_c1_r2"] == res["outlet"]["y_c1"]["r2"] and row["T_out_rmse"] == res["outlet"]["T_out"]["rmse"]
     assert row["t50_c1_rel_err_pct"] == per_case["t50_c1_rel_err_pct"]
-    assert not any(k.startswith(("moment", "field", "rmse_")) for k in row)
+    assert row["y_c1_r2_case_mean"] == pytest.approx(np.mean(r2)) and row["y_c1_r2_case_min"] == pytest.approx(min(r2))
+    assert not any(k.startswith(("moment", "field", "rmse_", "r2_")) for k in row)
+
+
+def test_single_case_r2_of_one_case_is_the_pooled_r2(tmp_path):
+    tf.keras.utils.set_random_seed(0)
+    cfg = small_cfg()
+    cases = [p for _, p in sample_cases(range(40), cfg["cases"])[:1]]
+    table, scales, _, _ = case_table(cases, cfg, "float32")
+    model = make_model(cfg, 2)
+    ref, _ = fake_reference(cases[0], compute_scales(cases[0], **cfg["scales"]), 50, 7, np.random.default_rng(2))
+    res = evaluate_cases(model, table, [0], cases, scales, [ref], cfg, str(tmp_path), n_plots=0)
+    for key in ("y_c1", "T_out"):
+        assert res["per_case_mean"]["r2_" + key] == pytest.approx(res["outlet"][key]["r2"])
+        assert res["worst_case"][key] == dict(case=0, r2=pytest.approx(res["outlet"][key]["r2"]))
 
 
 def test_evaluate_cases_without_velocity_data(tmp_path):

@@ -131,11 +131,14 @@ def _finite_stat(values, fn):
 
 def flat_metrics(res):
     """One flat row from an `evaluate_cases` result: <series>_rmse / _r2 of the pooled outlet
-    metrics, and the mean |relative error| (%) of each characteristic time over the cases."""
+    metrics, <series>_r2_case_mean / _r2_case_min (mean and lowest R2 of the single cases), and the
+    mean |relative error| (%) of each characteristic time over the cases."""
     row = {}
     for key, m in res["outlet"].items():
         row[key + "_rmse"] = m["rmse"]
         row[key + "_r2"] = m["r2"]
+        row[key + "_r2_case_mean"] = res["per_case_mean"].get("r2_" + key, float("nan"))
+        row[key + "_r2_case_min"] = res["per_case_min"].get("r2_" + key, float("nan"))
     row.update({k: v for k, v in res["per_case_mean_abs"].items() if k.endswith("_rel_err_pct")})
     return row
 
@@ -165,6 +168,8 @@ def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_di
             pooled[key][0].append(a)
             pooled[key][1].append(b)
             row["rmse_" + key] = float(np.sqrt(np.mean((a - b) ** 2)))
+            m = regression_metrics(a, b, ev["aard_min"])
+            row["r2_" + key] = m["r2"] if m else float("nan")
         for key, v in _times(p, pred, ref, ev, names).items():
             row[key + "_rel_err_pct"] = v["rel_err_pct"]  # NaN when PINN or reference never reach the level
             row[key + "_pinn_s"] = v["pinn_s"]
@@ -185,7 +190,11 @@ def evaluate_cases(model, table, case_indices, params, scales, refs, cfg, out_di
     res["per_case_mean_abs"] = {key: _finite_stat(np.abs(v), np.mean) for key, v in cols.items()}
     res["per_case_max_abs"] = {key: _finite_stat(np.abs(v), np.max) for key, v in cols.items()}
     res["per_case_mean"] = {key: _finite_stat(v, np.mean) for key, v in cols.items()}
+    res["per_case_min"] = {key: _finite_stat(v, np.min) for key, v in cols.items()}
     res["per_case_n_finite"] = {key: int(np.isfinite(v).sum()) for key, v in cols.items()}
+    # the case with the lowest R2 of each outlet series
+    res["worst_case"] = {key[3:]: dict(case=int(rows[int(np.nanargmin(v))]["case"]), r2=float(np.nanmin(v)))
+                         for key, v in cols.items() if key.startswith("r2_") and np.isfinite(v).any()}
     res["inference_ms_per_curve"] = inference_ms(model, table, int(case_indices[0]), len(refs[0]["t"]), int(ev["inference_repeats"]))
     res["n_cases"] = len(rows)
     with open(os.path.join(out_dir, "per_case_metrics.csv"), "w", newline="", encoding="utf-8") as f:
