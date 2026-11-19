@@ -13,10 +13,17 @@ Hard constraints (exact by construction, docs/nondim.md Section 4), with s = 1 -
 The Danckwerts inlet and the zero-gradient outlet stay as soft (loss) terms.
 """
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
 import tensorflow as tf
+
+# Hidden-layer activations. The PDE residuals need d2/dz2 of the outputs (dispersion, conduction),
+# so only smooth activations are allowed: ReLU has a zero second derivative (except at 0, where it
+# is undefined) and ELU a second derivative that jumps at 0 (docs/optuna_search_space.md).
+# "sin" is a SIREN layer with its own initialization (SineDense).
+ACTIVATIONS = ("tanh", "silu", "gelu", "softplus", "mish", "sin")
 
 
 @dataclass(frozen=True)
@@ -51,19 +58,58 @@ class FourierFeatures(tf.keras.layers.Layer):
         return tf.concat([tf.sin(proj), tf.cos(proj)], axis=-1)
 
 
-def _head(n_out, hidden, width, activation, name):
-    layers = [tf.keras.layers.Dense(width, activation=activation, name="%s_h%d" % (name, k)) for k in range(hidden)]
+class SineDense(tf.keras.layers.Layer):
+    """y = sin(w0 (x W + b)): one SIREN layer (Sitzmann et al., 2020) with its own initialization.
+
+    With n inputs, the first layer of the network draws W ~ U(-1/n, 1/n) and the later ones
+    W ~ U(-sqrt(6/n)/w0, sqrt(6/n)/w0), so that w0 (x W + b) has the same spread in every layer and
+    the activations keep one distribution through the depth. b ~ U(-1/sqrt(n), 1/sqrt(n)), as in
+    the reference code of the paper. w0 = 30 there; it also multiplies the gradients of W and b.
+    """
+
+    def __init__(self, units, w0, first, **kwargs):
+        super().__init__(**kwargs)
+        self.units, self.w0, self.first = int(units), float(w0), bool(first)
+
+    def build(self, input_shape):
+        n = int(input_shape[-1])
+        lim = 1.0 / n if self.first else math.sqrt(6.0 / n) / self.w0
+        blim = 1.0 / math.sqrt(n)
+        self.kernel = self.add_weight(name="kernel", shape=(n, self.units),
+                                      initializer=tf.keras.initializers.RandomUniform(-lim, lim))
+        self.bias = self.add_weight(name="bias", shape=(self.units,),
+                                    initializer=tf.keras.initializers.RandomUniform(-blim, blim))
+
+    def call(self, x):
+        return tf.sin(self.w0 * (tf.matmul(x, self.kernel) + self.bias))
+
+
+def _hidden_layer(units, model_cfg, name, first=False):
+    """A hidden layer of the trunk or of a head with the activation of model_cfg. `first`: the first
+    layer of the network (only SIREN initializes it differently)."""
+    activation = model_cfg["activation"]
+    if activation not in ACTIVATIONS:
+        raise ValueError("activation %r: use one of %s (smooth, so that d2/dz2 exists)" % (activation, ACTIVATIONS))
+    if activation == "sin":
+        return SineDense(units, model_cfg.get("siren_w0", 30.0), first, name=name)
+    return tf.keras.layers.Dense(units, activation=tf.keras.activations.get(activation), name=name)
+
+
+def _head(n_out, model_cfg, name):
+    """Hidden layers with the activation of the trunk, then a linear output layer."""
+    layers = [_hidden_layer(model_cfg["head_width"], model_cfg, "%s_h%d" % (name, k))
+              for k in range(model_cfg["head_hidden"])]
     layers.append(tf.keras.layers.Dense(n_out, name=name + "_out"))
     return layers
 
 
 class SubNet(tf.keras.layers.Layer):
-    """Trunk and heads of one domain. Returns the raw (unconstrained) outputs N_c, N_q, N_T, N_v."""
+    """Trunk and heads of one domain. Returns the raw (unconstrained) outputs N_c, N_q, N_T, N_v.
+    The trunk and the hidden layers of the heads all use model_cfg["activation"]."""
 
     def __init__(self, n_comp, model_cfg, t_final, **kwargs):
         super().__init__(**kwargs)
         ff = model_cfg["fourier"]
-        act = tf.keras.activations.get(model_cfg["activation"])
         self.t_final = float(t_final)
         self.ff = (
             FourierFeatures(ff["n_features"], ff["sigma_z"], ff["sigma_t"], ff["seed"], ff["trainable"], name="fourier")
@@ -71,14 +117,13 @@ class SubNet(tf.keras.layers.Layer):
             else None
         )
         self.trunk = [
-            tf.keras.layers.Dense(model_cfg["width"], activation=act, name="trunk_%d" % k)
+            _hidden_layer(model_cfg["width"], model_cfg, "trunk_%d" % k, first=(k == 0))
             for k in range(model_cfg["depth"])
         ]
-        hw, hh = model_cfg["head_width"], model_cfg["head_hidden"]
-        self.head_c = _head(n_comp, hh, hw, act, "head_c")
-        self.head_q = _head(n_comp, hh, hw, act, "head_q")
-        self.head_T = _head(1, hh, hw, act, "head_T")
-        self.head_v = _head(1, hh, hw, act, "head_v")
+        self.head_c = _head(n_comp, model_cfg, "head_c")
+        self.head_q = _head(n_comp, model_cfg, "head_q")
+        self.head_T = _head(1, model_cfg, "head_T")
+        self.head_v = _head(1, model_cfg, "head_v")
 
     @staticmethod
     def _apply(layers, h):

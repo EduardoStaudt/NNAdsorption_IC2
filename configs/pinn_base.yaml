@@ -29,7 +29,8 @@ theta:
 model:
   width: 128
   depth: 6
-  activation: tanh        # tanh | silu
+  activation: tanh        # tanh | silu | gelu | softplus | mish | sin (SIREN); smooth only, see models/pinn.py
+  siren_w0: 30.0          # activation sin only: y = sin(w0 (x W + b)), w0 of the SIREN paper
   head_hidden: 1          # hidden layers in each output head
   head_width: 64
   hard_ic: true           # initial state exact by construction
