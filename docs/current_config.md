@@ -1,14 +1,54 @@
-# Configuração atual do melhor modelo (phase3c_long)
+# Configuração atual do melhor modelo
 
-O melhor modelo até agora é o treino longo da etapa (c) da Fase 3, em `runs/phase3c_long`. É uma PINN
-só com física, treinada com os 31 parâmetros variando, e chega a y R² 0,932 nos 20 casos de
-validação da etapa (c). As continuações da Fase 4 (0,931 a 0,933) não passaram desse valor.
+Desde o estudo Optuna de 19 de novembro de 2026, o padrão das etapas é o trial 26 do estudo, e o
+melhor modelo da etapa (c) é `runs/optuna_b/confirm_c/t0026_seed0`. Ele é só física, foi treinado
+por 50 mil passos e chega a y R² 0,941 nos 20 casos de validação da etapa (c). A Tabela 1 mostra o
+que mudou. Fora isso, a configuração é a do `phase3c_long`, que este documento descreve a partir
+da seção "O modelo phase3c_long". As únicas outras diferenças são 50 mil passos em vez de 200 mil,
+o modo determinístico ligado e checkpoints e avaliações mais frequentes.
+
+## Mudanças do estudo Optuna
+
+Tabela 1. O que mudou no padrão das etapas com o estudo Optuna.
+
+| Parâmetro | Antes (phase3c_long) | Agora (trial 26) | Efeito medido |
+|---|---|---|---|
+| Ativação (`model.activation`) | tanh | SiLU | A SiLU é x vezes a sigmoide de x. É suave como a tanh, mas não satura para x grande. Sozinha, levou o y R² da etapa (b) de 0,842 para 0,921 aos 15 mil passos, o maior ganho isolado. |
+| Escala das Fourier features (`sigma_z`, `sigma_t`) | 2 em z, 1 em t | 0,59 em z, 0,30 em t | Frequências mais baixas, então a rede começa com funções mais suaves. Sozinha, levou o y R² de 0,842 para 0,879. |
+| Peso da energia (`loss.pde_terms`) | 10 | 2,2 | Sozinho, levou o y R² de 0,842 para 0,866. O peso 10 veio da Fase 0, quando, com peso 1, a rede caía na solução trivial T̃ ≈ 0. Com 2,2 isso não aconteceu nem com tanh (T_out RMSE de 22,2 K, igual ao do modelo antigo). |
+| Camadas do tronco (`model.depth`) | 6 | 8 | Não medido sozinho (ver abaixo). |
+| Neurônios por camada (`model.width`) | 128 | 224 | Não medido sozinho. |
+| Fourier features (`model.fourier.n_features`) | 64 frequências, 128 entradas | 128 frequências, 256 entradas | Não medido sozinho. |
+| Taxa de aprendizado máxima (`train.lr`) | 10⁻³ | 6,2 × 10⁻⁴ | Não medido sozinho. O cosseno continua terminando em 1% do máximo. |
+| Perda de Cauchy (`loss.robust_c`) | c = 10, só na etapa (c) | c = 24,3, em todas as etapas | Com c maior, a perda continua quase quadrática até resíduos maiores, e só os pontos absurdos são amortecidos. |
+| θ sorteados (`theta_colloc.n_theta`) | 2.048 | 1.024 | Não medido sozinho. O pool da etapa (c) cai de 1.074.176 para 549.888 pontos. |
+| Troca dos θ (`theta_colloc.resample_every_epochs`) | a cada 10 passadas pelo pool | a cada 19,5 passadas (etapa c) | Com o pool menor, o número de passadas quase dobra, e a troca continua a cada cerca de 2.600 passos. |
+| Pesos treináveis | 136.710 | 475.750 | |
+| Tempo por passo, sozinho na GPU | 9,4 ms | 20,9 ms | 50 mil passos custam 0,30 GPU-h em vez de 0,14. |
+
+Fonte: `runs/optuna_b/confirm_c/t0026_seed0/config.yaml`, `configs/phase2_base.yaml` e
+`docs/optuna_stage_b_results.md`.
+
+Os três primeiros itens foram medidos um de cada vez, partindo do modelo antigo. Juntos, ainda com a
+rede de 6 × 128, eles levaram o y R² da etapa (b) a 0,939 aos 15 mil passos. As outras mudanças do
+trial 26 (rede maior, mais Fourier features, taxa de aprendizado, Cauchy e número de θ) somaram
+mais 0,013, chegando a 0,952, e ajudaram principalmente o pior caso, que foi de 0,752 para 0,839.
+Na rede nova, a matriz B das Fourier features é 2 × 128, o tronco recebe 289 entradas (256 das
+Fourier features, as 2 coordenadas e os 31 parâmetros) e as cabeças também usam SiLU.
+
+## O modelo phase3c_long
+
+Até o estudo, o melhor modelo era o treino longo da etapa (c) da Fase 3, em `runs/phase3c_long`. É
+uma PINN só com física, treinada com os 31 parâmetros variando, e chega a y R² 0,932 nos 20 casos
+de validação da etapa (c). As continuações da Fase 4 (0,931 a 0,933) não passaram desse valor. Ele
+continua sendo o treino mais longo feito até agora.
 
 A configuração completa está em `runs/phase3c_long/config.yaml`. Ela junta
 `configs/phase3_stage_c_long.yaml` com os arquivos que ele herda, nesta ordem:
-`phase2_stage_c.yaml`, `phase2_base.yaml`, `pinn_parametric.yaml` e `pinn_base.yaml`. Este run foi
-treinado antes do modo determinístico. Uma rodada nova com a mesma configuração sai determinística,
-que é o padrão desde a Fase 4, mas não idêntica bit a bit a este run.
+`phase2_stage_c_before_optuna.yaml` (que guarda os valores de antes do estudo), `phase2_stage_c.yaml`,
+`phase2_base.yaml`, `pinn_parametric.yaml` e `pinn_base.yaml`. Este run foi treinado antes do modo
+determinístico. Uma rodada nova com a mesma configuração sai determinística, que é o padrão desde a
+Fase 4, mas não idêntica bit a bit a este run.
 
 ## Como a rede calcula a saída
 
@@ -31,7 +71,7 @@ São 136.710 pesos treináveis: 103.296 no tronco e 33.414 nas cabeças. A matri
 
 ## Tabela de parâmetros
 
-Tabela 1. Configuração do run `phase3c_long`.
+Tabela 2. Configuração do run `phase3c_long`.
 
 | Parâmetro | Valor | O que faz |
 |---|---|---|
