@@ -11,7 +11,9 @@ Several trials can train at the same time on the GPU: `run --workers N` starts N
 the same study, each with its own sampler seed, so that they do not propose the same trial. Every
 trial has its own run directory and the usual training seeds, so its result depends only on its
 hyperparameters, not on the worker or on N. Each training process gets a fixed share of the GPU
-memory (--gpu-mem-mb, i.e. runtime.gpu_memory_mb; 3072 MB fits the largest network of the space).
+memory (--gpu-mem-mb, i.e. runtime.gpu_memory_mb). The default is the space's: 3072 MB for b1, 7000 MB
+for b2, whose largest networks need up to 5.6 GB (run it with 2 workers). The limit does not change
+the results (bit-identical at 3072 and 7000 MB, docs/optuna2_plan.md).
 
 The study is stored in an Optuna journal file (runs/<name>/study.log), so it can be paused and
 resumed. SQLite (--storage sqlite, runs/<name>/study.db) is kept for a single worker only: with the
@@ -23,7 +25,9 @@ start the training processes and read their val_curve.csv and summary.json.
 Two search spaces (--space): b1, the first study (runs/optuna_b, docs/optuna_stage_b.md), and b2,
 the second one (runs/optuna_b2, docs/optuna2_plan.md): more activations and wider ranges where
 trial 26 of the first study sat at the edge. Trial 0 of each study is its reference: the model
-before the study (b1) or trial 26 of the first study (b2).
+before the study (b1) or trial 26 of the first study (b2). In b2 every run sets model.siren_w0=1: the
+"sin" activation is a sine layer with the SIREN initialization and w0 = 1, since w0 = 30 (the SIREN
+paper) and w0 = 5 diverged or stalled in the benchmark (docs/optuna2_plan.md).
 
 Commands, from the repository root inside WSL (~/ic2env/bin/python):
     python scripts/optuna_stage_b.py run --n-trials 60 --workers 3   start, or resume until 60 trials
@@ -70,7 +74,8 @@ N_FIXED = {"b": 1, "c": 50}  # fixed collocation theta: the base case (b), the 5
 STUDY_NAME = "stage_b"
 SEEDS = (0, 1)
 TOP = 3
-GPU_MEM_MB = 3072  # largest network of the space (8 x 256, SiLU, 128 Fourier features, 4096 theta): peak 2.6 GB
+GPU_MEM_MB = 3072  # b1: largest network of its space (8 x 256, SiLU, 128 Fourier features, 4096 theta): peak 2.6 GB
+B2_GPU_MEM_MB = 7000  # b2, 2 workers: largest measured peak 5.6 GB (12 x 320, Mish, 256 Fourier features)
 FINISHED = (TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL)
 BUSY = FINISHED + (TrialState.RUNNING,)  # counted against --n-trials, so that parallel workers do not overshoot
 NAN = float("nan")
@@ -120,12 +125,21 @@ class Space:
     reference_label: str
     reference_runs: str   # "": `confirm` trains the reference; else its runs ("<runs>/confirm_<stage>/..._seed<seed>")
     stage_c_always: bool  # False: the best goes to stage (c) only if it beats the reference on stage (b)
+    fixed_sets: tuple = ()  # --set items of every run of the study (trials and confirmation)
+    gpu_mem_mb: int = GPU_MEM_MB  # default GPU memory of each training process
+    act_names: tuple = ()  # (activation, name in reports and figures) where the name is not the activation
 
 
 SPACES = {
     "b1": Space("stage_b", "optuna_b", SPACE_B1, CURRENT, "current", "", False),
-    "b2": Space("stage_b2", "optuna_b2", SPACE_B2, T26, "study1_t0026", "optuna_b/confirm_%s/t0026_seed%d", True),
+    "b2": Space("stage_b2", "optuna_b2", SPACE_B2, T26, "study1_t0026", "optuna_b/confirm_%s/t0026_seed%d", True,
+                fixed_sets=("model.siren_w0=1",), gpu_mem_mb=B2_GPU_MEM_MB,
+                act_names=(("sin", "sin (SIREN init, w0 = 1)"),)),
 }
+
+
+def act_name(space, activation):
+    return dict(space.act_names).get(activation, activation)
 
 
 def space_of(args):
@@ -207,11 +221,12 @@ def overrides(p, n_fixed):
 
 
 def common_sets(args):
-    """Overrides of every run of the study: where it writes, and its GPU memory."""
+    """Overrides of every run of the study: where it writes, its GPU memory, and the fixed settings of
+    its search space."""
     sets = ["logging.runs_dir=%s" % args.runs_dir]
     if args.gpu_mem_mb > 0:
         sets.append("runtime.gpu_memory_mb=%d" % args.gpu_mem_mb)
-    return sets
+    return sets + list(space_of(args).fixed_sets)
 
 
 def train_command(args, config, val, run_name, sets):
@@ -419,9 +434,10 @@ def elapsed_hours(trials):
     return (max(t.datetime_complete for t in done) - min(t.datetime_start for t in done)).total_seconds() / 3600
 
 
-def activation_table(trials, activations):
+def activation_table(trials, activations, space=None):
     """Per activation: trials by state, best and median final y R2 of the complete trials, and the
     median y R2 at the first pruning check (5 000 steps), which every trial reached."""
+    space = space or SPACES["b1"]
     lines = ["| activation | complete / pruned / failed | best y R2 | median y R2 | median at 5000 steps (all) |",
              "|---|---|---|---|---|"]
     for a in activations:
@@ -430,7 +446,7 @@ def activation_table(trials, activations):
         first = [t.intermediate_values[5000] for t in ts if 5000 in t.intermediate_values]
         n = [sum(t.state == s for t in ts) for s in (TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL)]
         lines.append("| %s | %d / %d / %d | %s | %s | %s |" % (
-            a, *n, "%.4f" % max(done) if done else "-", "%.4f" % statistics.median(done) if done else "-",
+            act_name(space, a), *n, "%.4f" % max(done) if done else "-", "%.4f" % statistics.median(done) if done else "-",
             "%.4f" % statistics.median(first) if first else "-"))
     return "\n".join(lines)
 
@@ -457,7 +473,7 @@ def print_report(study, top=None, importance=False, space=None):
     for t in trials:
         if t.state == TrialState.FAIL:
             print("failed trial %d: %s" % (t.number, t.user_attrs.get("error", "see the log")))
-    print(activation_table(trials, space.params["activation"][1]))
+    print(activation_table(trials, space.params["activation"][1], space))
     if importance:
         imp = optuna.importance.get_param_importances(
             study, evaluator=optuna.importance.FanovaImportanceEvaluator(seed=0))
@@ -695,7 +711,8 @@ def cmd_plot(args):
             group = [t for t in ts if t.params["activation"] == act]
             if group:
                 ax.scatter([x_of(t) for t in group], [max(t.value, args.ymin + 0.004) for t in group], s=34,
-                           c=PALETTE[i], marker=MARKERS[i], edgecolors="white", linewidths=0.6, label=act, zorder=3)
+                           c=PALETTE[i], marker=MARKERS[i], edgecolors="white", linewidths=0.6,
+                           label=act_name(space, act), zorder=3)
         for t in ts:
             if t.value < args.ymin:  # off the scale: drawn on the bottom edge, with its value
                 label("t%d: %s" % (t.number, ("%.2f" % t.value).replace("-", "−")), t, args.ymin + 0.004, 3,
@@ -706,7 +723,7 @@ def cmd_plot(args):
                     ax.scatter([x_of(t)], [y], s=150, facecolors="none", edgecolors=INK, linewidths=1.1, zorder=4)
                 label("t%d" % t.number, t, y, -12 if t is best else 4, fontsize=7.5, color=INK)
         if kind == "cat":
-            ax.set_xticks(range(len(a[0])), [str(c) for c in a[0]])
+            ax.set_xticks(range(len(a[0])), [act_name(space, c) if name == "activation" else str(c) for c in a[0]])
             ax.set_xlim(-0.6, len(a[0]) - 0.4)
         else:
             if kind == "log":
@@ -748,7 +765,8 @@ def main(argv=None):
                         help="journal file (default) or SQLite (a single worker only)")
         sp.add_argument("--eval-every", type=int, default=2500, help="steps between validations (pruner)")
         sp.add_argument("--poll-s", type=float, default=2.0, help="seconds between reads of the validation curve")
-        sp.add_argument("--gpu-mem-mb", type=int, default=GPU_MEM_MB, help="GPU memory of each training process (0: as needed)")
+        sp.add_argument("--gpu-mem-mb", type=int, default=None,
+                        help="GPU memory of each training process (0: as needed; default: of the space)")
         sp.add_argument("--train-script", default=TRAIN_SCRIPT, help=argparse.SUPPRESS)  # tests: a stand-in trainer
         if name in ("run", "worker"):
             sp.add_argument("--n-trials", type=int, required=True, help="finished trials to reach")
@@ -767,6 +785,8 @@ def main(argv=None):
             sp.add_argument("--steps", type=int, default=15000, help="training steps per trial (axis label)")
     args = ap.parse_args(argv)
     args.name = args.name or SPACES[args.space].default_dir
+    if args.gpu_mem_mb is None:
+        args.gpu_mem_mb = SPACES[args.space].gpu_mem_mb
     args.runs_dir = os.path.abspath(args.runs_dir)
     args.train_script = os.path.abspath(args.train_script)
     commands = dict(run=cmd_run, worker=cmd_worker, confirm=cmd_confirm, plot=cmd_plot,

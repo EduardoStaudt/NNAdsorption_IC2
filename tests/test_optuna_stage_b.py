@@ -218,7 +218,7 @@ def test_study_prunes_fails_pauses_resumes_and_confirms(tmp_path, capsys):
     assert ua["y_r2_case_mean"] == pytest.approx(0.90) and ua["y_r2_case_min"] == pytest.approx(0.65) and ua["worst_case"] == 3
     sets = json.loads((study_dir / "t0000" / "sets.json").read_text())
     assert sets["model.depth"] == "6" and sets["train.steps"] == "15000" and sets["phase2.eval_every"] == "2500"
-    assert sets["runtime.gpu_memory_mb"] == str(osb.GPU_MEM_MB)
+    assert sets["runtime.gpu_memory_mb"] == str(osb.GPU_MEM_MB) and "model.siren_w0" not in sets
 
     osb.main(["report", "--importance", *common])
     assert "importance (fANOVA" in capsys.readouterr().out
@@ -258,10 +258,12 @@ def test_second_study_starts_from_trial_26_and_reuses_its_confirmation(tmp_path,
     assert len(study.trials) == 6 and osb.same_as(study.trials[0].params, osb.T26)
     sets = json.loads((runs / "optuna_b2" / "t0000" / "sets.json").read_text())
     assert sets["model.activation"] == "silu" and sets["model.depth"] == "8" and sets["model.fourier.n_features"] == "128"
+    assert sets["model.siren_w0"] == "1" and sets["runtime.gpu_memory_mb"] == "7000"  # every run of b2
 
     osb.main(["report", "--space", "b2", *common])
     out = capsys.readouterr().out
     assert "0 (study1_t0026)" in out and "| activation | complete / pruned / failed |" in out
+    assert "| sin (SIREN init, w0 = 1) | " in out
 
     osb.main(["plot", "--space", "b2", "--out", str(tmp_path / "figs"), *common])
     assert sorted(os.listdir(tmp_path / "figs")) == sorted(name + ".png" for name in osb.SPACE_B2)
@@ -276,6 +278,8 @@ def test_second_study_starts_from_trial_26_and_reuses_its_confirmation(tmp_path,
     assert res["stage_c"]["t0005"]["y_r2"] == pytest.approx([0.91, 0.92])
     assert sorted(os.listdir(runs / "optuna_b2" / "confirm_b")) == ["t%04d_seed%d" % (t, s) for t in (3, 4, 5) for s in (0, 1)]
     assert sorted(os.listdir(runs / "optuna_b" / "confirm_b")) == ["t0026_seed0", "t0026_seed1"]  # nothing new there
+    sets = json.loads((runs / "optuna_b2" / "confirm_c" / "t0005_seed1" / "sets.json").read_text())
+    assert sets["model.siren_w0"] == "1" and sets["runtime.gpu_memory_mb"] == "7000" and sets["runtime.seed"] == "1"
 
 
 def study_args(tmp_path):
