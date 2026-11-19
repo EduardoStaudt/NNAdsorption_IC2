@@ -150,7 +150,7 @@ exatamente o mesmo y R² sozinho e ao lado de outros três. No meio do caminho, 
 Optuna entregou a mesma combinação para os 4 processos, e troquei para o arquivo de journal do
 próprio Optuna, que não tem esse problema.
 
-Tabela 4. Vazão com N treinos juntos na RTX 5070 Ti (modelo atual, 15 mil passos).
+Tabela 4. Vazão com N treinos juntos na RTX 5070 Ti (modelo anterior, 15 mil passos).
 
 | Treinos juntos | Tempo | Combinações por hora | Ganho | Memória da GPU (pico) |
 |---|---|---|---|---|
@@ -161,44 +161,44 @@ Tabela 4. Vazão com N treinos juntos na RTX 5070 Ti (modelo atual, 15 mil passo
 
 Fonte: Autoria própria.
 
-O estudo levou 2,3 h. O modelo atual ficou em 25º lugar entre as 29 combinações que chegaram ao
+O estudo levou 2,3 h. O modelo anterior ficou em 25º lugar entre as 29 combinações que chegaram ao
 fim, com 0,842 em 15 mil passos. A melhor chegou a 0,952, com 8 camadas de 224 neurônios, SiLU,
-128 Fourier features com escala 0,30 (frequências mais baixas que as atuais) e peso da energia
-2,2. As 10 melhores têm o mesmo perfil: todas usam SiLU e peso da energia entre 1 e 5,2 (o atual
-é 10), e 9 delas usam 128 Fourier features com escala baixa. A temperatura de saída também
+128 Fourier features com escala 0,30 (frequências mais baixas que as anteriores) e peso da energia
+2,2. As 10 melhores têm o mesmo perfil: todas usam SiLU e peso da energia entre 1 e 5,2 (o anterior
+era 10), e 9 delas usam 128 Fourier features com escala baixa. A temperatura de saída também
 melhorou sem estar no objetivo, com o RMSE caindo de 22,3 para 12,0 K. Pela análise de
 importância do Optuna, o parâmetro mais importante foi o peso da energia, com folga, mas a
 ablação mais abaixo mostrou outra coisa.
 
-Para confirmar, treinei as 3 melhores e o modelo atual por 50 mil passos, com 2 seeds cada
+Para confirmar, treinei as 3 melhores e o modelo anterior por 50 mil passos, com 2 seeds cada
 (Tabela 5).
 
 Tabela 5. Confirmação na etapa (b) com 50 mil passos (y R² na validação).
 
 | Configuração | Seed 0 | Seed 1 | Média | Pior caso (média) | RMSE de T na saída (média) |
 |---|---|---|---|---|---|
-| Atual (6 × 128, tanh) | 0,926 | 0,930 | 0,928 | 0,773 | 13,1 K |
+| Anterior (6 × 128, tanh) | 0,926 | 0,930 | 0,928 | 0,773 | 13,1 K |
 | 1ª do estudo (8 × 224, SiLU) | 0,974 | 0,973 | 0,973 | 0,842 | 9,2 K |
 | 2ª do estudo (7 × 192, SiLU) | 0,972 | 0,973 | 0,973 | 0,843 | 9,5 K |
 | 3ª do estudo (7 × 192, SiLU) | 0,971 | 0,973 | 0,972 | 0,850 | 9,5 K |
 
 Fonte: Autoria própria.
 
-A melhor ficou 0,045 acima do modelo atual, três vezes a diferença de 0,015 que duas seeds da
+A melhor ficou 0,045 acima do modelo anterior, três vezes a diferença de 0,015 que duas seeds da
 mesma configuração chegam a ter. As 3 do estudo ficaram a menos de 0,001 uma da outra, então
 qualquer uma serviria. O pior caso continua sendo o caso 11, a frente mais abrupta da validação (a
 curva de saída sobe do início da ruptura até 90% em cerca de 2 s), mas ele subiu de 0,773 para
 0,842.
 
-Na etapa (c), com os 31 parâmetros variando, testei a melhor contra a atual nas mesmas condições
+Na etapa (c), com os 31 parâmetros variando, testei a melhor contra a anterior nas mesmas condições
 (50 mil passos, 2 seeds, outros 20 casos de validação). A melhor deu 0,941 e 0,940, contra 0,901 e
-0,899 da atual. Com só 50 mil passos ela passou o 0,932 do treino longo de 200 mil passos, que era
+0,899 da anterior. Com só 50 mil passos ela passou o 0,932 do treino longo de 200 mil passos, que era
 o platô da seção 4.3, e o pior caso da etapa (c) foi de 0,306 para 0,617. Com isso a etapa (b)
 passou da meta de 0,95 e a (c) ficou perto dela.
 
 A melhor configuração muda os 9 hiperparâmetros de uma vez. Para entender de onde vinha o ganho,
-rodei 4 treinos curtos extras (15 mil passos) partindo do modelo atual e mudando uma coisa por
-vez. Só o SiLU levou o y R² de 0,842 para 0,921, só a escala menor das Fourier features para 0,879
+rodei 4 treinos curtos extras (15 mil passos) partindo do modelo anterior e mudando uma coisa por
+vez. Só a SiLU levou o y R² de 0,842 para 0,921, só a escala menor das Fourier features para 0,879
 e só o peso da energia 2,2 para 0,866. As três mudanças juntas, ainda com a rede de 6 × 128,
 chegaram a 0,939, perto do 0,952 da melhor, com menos da metade do custo por passo. O caso mais
 curioso foi o peso da energia: a análise de importância do Optuna colocou ele em primeiro, mas
