@@ -21,7 +21,7 @@ to `t0059`, the study journal `study.log`, the confirmation in `confirm_b/`, `co
   size of the current network, give 0.939 at 15 000 steps: most of the gain at the old step time.
   SiLU matters most, not the energy weight that the importance analysis ranked first.
 - 4 trials at a time on the GPU: 4.7 h for the study and the confirmation instead of about 5.9 h
-  one at a time (1.36x for the study, 1.15x for the long runs). The results are the same, bit for
+  one at a time (1.36x for the study, 1.15x to 1.18x for the long runs). The results are the same, bit for
   bit, whether a run trains alone or next to others.
 
 ## Parallel workers
@@ -169,8 +169,10 @@ The step time of the SiLU rows is an estimate: the grid of the plan measured +0.
 the 6 x 128 network.
 
 SiLU alone gives the most (+0.079), and the energy weight alone the least (+0.024). So the fANOVA
-ranking above was misleading: it gave the energy weight 0.76 because, in the complete trials, a
-high energy weight always came with tanh. The three changes together give 0.939, 88 % of the gain
+ranking above overrated the energy weight (0.76). The 4 complete tanh trials all had a weight of
+10 or more, and they are 4 of the 6 complete trials with such a weight, so part of the effect of
+tanh went to the energy weight. The weight still matters: the other 2, with SiLU and a weight of
+11.7 and 19.0, reached only 0.905 and 0.701. The three changes together give 0.939, 88 % of the gain
 of trial 26 (+0.097 of +0.110), with a network of the current size, at less than half the step
 time. Their gains do not add up (0.079 + 0.037 + 0.024 = 0.140): they partly fix the same thing.
 The larger network of trial 26 matters most for the hardest case: its worst case is 0.839,
@@ -251,7 +253,7 @@ study gain would be 1.22x.
 The 4 workers saved 1.2 h of about 5.9 h. They paid off most in the study: its trials are short,
 so start-up, compile and evaluations are a large part of each one, and they overlap well with the
 training of the others. In the 50 000 step runs that part is small. There the GPU is shared almost
-evenly in time (the current model ran 5.4 times slower than alone, trial 26 only 2.8 times), so
+evenly in time (the current model ran 5.4 to 5.6 times slower than alone, trial 26 only 2.8 times), so
 training goes only a little faster than one run at a time.
 
 ## Verdict
