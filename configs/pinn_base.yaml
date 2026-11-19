@@ -7,6 +7,7 @@ runtime:
   dtype: float32          # float32 | float64 (all tensors and Keras layers)
   tf32: false             # TensorFloat-32 matmuls (~1e-3 relative error): keep off for PINNs
   deterministic: true     # deterministic GPU kernels: same results run after run (Phase 4: +1.5 % time per step)
+  gpu_memory_mb: null     # > 0: fixed GPU memory for this run (several runs on one GPU); null: take it as needed
 
 physics:
   n_comp: 2

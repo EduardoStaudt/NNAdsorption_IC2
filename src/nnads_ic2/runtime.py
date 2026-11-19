@@ -12,6 +12,8 @@ Run-to-run determinism (`runtime.deterministic`): every random draw of the packa
 may still add floating-point numbers in a different order from run to run; two runs of the same
 config then drift apart after ~1000 steps (Phase 3: y R2 0.927 vs 0.903). With the option on,
 TensorFlow (and XLA) only use deterministic GPU algorithms.
+GPU memory: by default a run takes memory as it needs it. With `runtime.gpu_memory_mb` it gets a
+fixed amount instead, so that several runs can share one GPU without taking memory from each other.
 """
 
 import importlib.util
@@ -54,17 +56,35 @@ def set_float_dtype(dtype):
 def setup_tf(runtime_cfg):
     """Apply the `runtime:` section of the config. Returns the float dtype name."""
     tf.config.experimental.enable_tensor_float_32_execution(bool(runtime_cfg["tf32"]))
+    limit_mb = runtime_cfg.get("gpu_memory_mb")
     for gpu in tf.config.list_physical_devices("GPU"):
         try:
-            tf.config.experimental.set_memory_growth(gpu, True)
+            if limit_mb:  # a fixed share of the GPU, so that several runs fit on it together
+                tf.config.set_logical_device_configuration(
+                    gpu, [tf.config.LogicalDeviceConfiguration(memory_limit=int(limit_mb))])
+            else:  # take GPU memory as it is needed
+                tf.config.experimental.set_memory_growth(gpu, True)
         except RuntimeError:
-            pass  # GPU already initialised (e.g. inside pytest); growth cannot change anymore
+            pass  # GPU already initialised (e.g. inside pytest); memory settings cannot change anymore
     dtype = runtime_cfg["dtype"]
     set_float_dtype(dtype)
     tf.keras.utils.set_random_seed(int(runtime_cfg["seed"]))  # Python, NumPy and TensorFlow seeds
     if runtime_cfg.get("deterministic"):
         tf.config.experimental.enable_op_determinism()  # same results run after run (GPU included)
     return dtype
+
+
+def memory_peaks():
+    """Peak memory of this process so far, in MB: GPU memory allocated by TensorFlow (None without a
+    GPU) and resident host memory (None where the `resource` module is missing)."""
+    gpu = tf.config.experimental.get_memory_info("GPU:0")["peak"] / 2**20 if tf.config.list_physical_devices("GPU") else None
+    try:
+        import resource
+
+        host = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # Linux: kB
+    except ImportError:
+        host = None
+    return dict(gpu_peak_mb=gpu, host_peak_rss_mb=host)
 
 
 def device_name():

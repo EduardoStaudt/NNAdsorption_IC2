@@ -252,7 +252,7 @@ def main():
                       first_step_s=timing.get("first_step_s"), jit_compile=bool(cfg["train"]["jit_compile"]),
                       n_params=march["n_params"] if march else int(sum(v.numpy().size for v in model.trainable_variables)),
                       final_lambdas=trainer.weights.as_dict(), final_causal_eps=float(trainer.causal.eps.numpy()),
-                      pool_size=colloc.pool.size),
+                      pool_size=colloc.pool.size, **runtime.memory_peaks()),
         march=march,
     )
     if train["extra"] is not None:  # whole domain: also the Phase 1 validation seeds (comparison with Phase 1)
