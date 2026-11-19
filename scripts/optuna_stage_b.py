@@ -13,10 +13,12 @@ trial has its own run directory and the usual training seeds, so its result depe
 hyperparameters, not on the worker or on N. Each training process gets a fixed share of the GPU
 memory (--gpu-mem-mb, i.e. runtime.gpu_memory_mb; 3072 MB fits the largest network of the space).
 
-The study is stored in SQLite (runs/<name>/study.db) or, with --storage journal, in an Optuna journal
-file (runs/<name>/study.log), so it can be paused and resumed. The study processes do not import
-TensorFlow and hold no GPU memory: they start the training processes and read their val_curve.csv
-and summary.json.
+The study is stored in an Optuna journal file (runs/<name>/study.log), so it can be paused and
+resumed. SQLite (--storage sqlite, runs/<name>/study.db) is kept for a single worker only: with the
+Python sqlite3 driver the "still queued?" check and the switch to running are not one transaction,
+and 4 workers started together all took the same queued trial (the journal records which worker
+owns each running trial). The study processes do not import TensorFlow and hold no GPU memory: they
+start the training processes and read their val_curve.csv and summary.json.
 
 Commands, from the repository root inside WSL (~/ic2env/bin/python):
     python scripts/optuna_stage_b.py run --n-trials 60 --workers 3   start, or resume until 60 trials
@@ -27,8 +29,9 @@ Commands, from the repository root inside WSL (~/ic2env/bin/python):
 
 Pause: create runs/<name>/STOP. Each worker finishes its running trial, then stops. Delete the file
 and run the same command again to resume. If a study process is killed, its training processes get
-SIGTERM. With SQLite such a trial stays "running" until its heartbeat is 3 minutes old, then it is
-marked failed and queued again (once). The journal storage has no heartbeat.
+SIGTERM, and its trial stays "running" in the storage. Only one `run` may be active at a time, so
+`run` marks the trials it finds running as failed ("interrupted") and queues their parameters again
+(once); such a trial counts against --n-trials.
 """
 import argparse
 import concurrent.futures
@@ -384,14 +387,27 @@ def worker_command(args, i):
             "--n-trials", str(args.n_trials), "--steps", str(args.steps)]
 
 
+def recover_interrupted(study):
+    """Trials still running when `run` starts were cut off by a killed study (only one `run` is active
+    at a time): mark them failed and queue their parameters again, once."""
+    for t in study.get_trials(deepcopy=False, states=(TrialState.RUNNING,)):
+        study._storage.set_trial_user_attr(t._trial_id, "error", "interrupted (the study was stopped while it ran)")
+        study.tell(t.number, state=TrialState.FAIL)
+        if t.params and "retry_of" not in t.user_attrs:
+            study.enqueue_trial(t.params, user_attrs={"retry_of": t.number})
+        print("trial %d was interrupted: failed%s" % (t.number, ", queued again" if t.params else ""), flush=True)
+
+
 def cmd_run(args):
     """Start (or resume) the study with args.workers worker processes and wait for them."""
+    if args.storage == "sqlite" and args.workers > 1:
+        sys.exit("SQLite cannot hand queued trials to parallel workers safely: use --storage journal")
     study = open_study(args)
     study_dir = os.path.join(args.runs_dir, args.name)
     stop_path = os.path.join(study_dir, "STOP")
     if os.path.exists(stop_path):
         sys.exit("%s exists: delete it to run the study" % stop_path)
-    optuna.storages.fail_stale_trials(study)  # trials left running by killed workers (SQLite only)
+    recover_interrupted(study)
     if not study.trials:
         study.enqueue_trial(dict(CURRENT))  # the current model first: a reference for the pruner
     n = min(args.workers, args.n_trials - len(study.get_trials(deepcopy=False, states=BUSY)))
@@ -515,7 +531,8 @@ def main(argv=None):
         sp = sub.add_parser(name)
         sp.add_argument("--name", default="optuna_b", help="study directory under the runs directory")
         sp.add_argument("--runs-dir", default=os.path.join(ROOT, "runs"))
-        sp.add_argument("--storage", choices=("sqlite", "journal"), default="sqlite")
+        sp.add_argument("--storage", choices=("journal", "sqlite"), default="journal",
+                        help="journal file (default) or SQLite (a single worker only)")
         sp.add_argument("--eval-every", type=int, default=2500, help="steps between validations (pruner)")
         sp.add_argument("--poll-s", type=float, default=2.0, help="seconds between reads of the validation curve")
         sp.add_argument("--gpu-mem-mb", type=int, default=GPU_MEM_MB, help="GPU memory of each training process (0: as needed)")

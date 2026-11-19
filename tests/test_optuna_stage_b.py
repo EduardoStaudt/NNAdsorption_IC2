@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import json
 import os
@@ -152,9 +153,9 @@ def test_study_prunes_fails_pauses_resumes_and_confirms(tmp_path, capsys):
     with pytest.raises(SystemExit):
         osb.main(["run", "--n-trials", "9", *common])
     (study_dir / "STOP").unlink()
-    osb.main(["run", "--n-trials", "9", *common])  # resumes from the SQLite file
+    osb.main(["run", "--n-trials", "9", *common])  # resumes from the journal file
 
-    study = load(study_dir, "sqlite")
+    study = load(study_dir, "journal")
     assert [t.state for t in study.trials] == [S.COMPLETE] * 5 + [S.PRUNED, S.FAIL, S.FAIL, S.COMPLETE]
     assert osb.same_as_current(study.trials[0].params)
     assert max(study.trials[5].intermediate_values) == 5000  # first check after the warm-up
@@ -182,13 +183,40 @@ def test_study_prunes_fails_pauses_resumes_and_confirms(tmp_path, capsys):
     assert not [d for d in os.listdir(study_dir / "confirm_b") if "_old_" in d]
 
 
-@pytest.mark.parametrize("storage", ["sqlite", "journal"])
-def test_parallel_workers_share_one_study(tmp_path, storage):
+def study_args(tmp_path):
+    return argparse.Namespace(runs_dir=str(tmp_path / "runs"), name="optuna_b", storage="journal", eval_every=2500)
+
+
+def test_parallel_workers_share_one_study(tmp_path):
     common = fake_setup(tmp_path, {"default": {"final": 0.9, "sleep": 0.25}})
-    osb.main(["run", "--n-trials", "9", "--workers", "3", "--storage", storage, *common])
-    trials = load(tmp_path / "runs" / "optuna_b", storage).trials
+    study = osb.open_study(study_args(tmp_path))
+    for _ in range(6):  # queued trials: the workers must not take the same one (SQLite did)
+        study.enqueue_trial(dict(osb.CURRENT))
+    osb.main(["run", "--n-trials", "9", "--workers", "3", *common])
+    trials = load(tmp_path / "runs" / "optuna_b", "journal").trials
     assert len(trials) == 9 and all(t.state == S.COMPLETE for t in trials)  # no extra trials at the end
     assert {t.user_attrs["worker"] for t in trials} == {0, 1, 2}
-    assert len({json.dumps(t.params, sort_keys=True) for t in trials}) == 9  # each worker samples its own trials
+    assert all(osb.same_as_current(t.params) for t in trials[:6])
+    assert len({json.dumps(t.params, sort_keys=True) for t in trials[6:]}) == 3  # each worker samples its own trials
+    assert sorted(os.listdir(tmp_path / "runs" / "optuna_b" / "t0000")) == ["sets.json", "stdout.txt", "summary.json",
+                                                                              "train_log.csv", "val_curve.csv"]
+    assert sorted(d for d in os.listdir(tmp_path / "runs" / "optuna_b") if d.startswith("t")) == ["t%04d" % i for i in range(9)]
     spans = sorted((t.datetime_start, t.datetime_complete) for t in trials)
     assert any(b0 < a1 for (a0, a1), (b0, b1) in zip(spans, spans[1:]))  # some trials ran at the same time
+
+
+def test_sqlite_is_for_one_worker_only(tmp_path):
+    common = fake_setup(tmp_path, {"default": {"final": 0.9}})
+    with pytest.raises(SystemExit, match="journal"):
+        osb.main(["run", "--n-trials", "4", "--workers", "2", "--storage", "sqlite", *common])
+
+
+def test_run_recovers_trials_left_running(tmp_path):
+    common = fake_setup(tmp_path, {"default": {"final": 0.9}})
+    study = osb.open_study(study_args(tmp_path))
+    osb.suggest(study.ask())  # a trial cut off by a killed study: running, its parameters set
+    osb.main(["run", "--n-trials", "3", "--workers", "2", *common])
+    trials = load(tmp_path / "runs" / "optuna_b", "journal").trials
+    assert [t.state for t in trials] == [S.FAIL, S.COMPLETE, S.COMPLETE]
+    assert "interrupted" in trials[0].user_attrs["error"]
+    assert trials[1].params == trials[0].params and trials[1].user_attrs["retry_of"] == 0
