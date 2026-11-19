@@ -158,6 +158,10 @@ to 32.3 / 4 = 8.1 ms per step together, 1.14x. So the 15 000 step trials gain ab
 gives about 2.1 + 1.1 + 0.5 = 3.7 h instead of 4.7 h. The GPU is shared, so GPU-h no longer equals
 the sum of the run times: each run takes about N times longer than alone.
 
+Actual (docs/optuna_stage_b_results.md): 2.34 + 1.62 + 0.76 = 4.72 h. The gains were as expected
+(1.36x for the study, 1.15x and 1.18x for the confirmation), but the estimate above assumed the
+average network of the space, and the study moved to large networks (17 to 21 ms per step alone).
+
 ## Caveats
 
 - **Short trials.** At 15 000 steps the current model reaches 0.842. At 50 000 it reaches 0.925
