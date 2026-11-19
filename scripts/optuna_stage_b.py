@@ -15,6 +15,11 @@ memory (--gpu-mem-mb, i.e. runtime.gpu_memory_mb). The default is the space's: 3
 for b2, whose largest networks need up to 5.6 GB (run it with 2 workers). The limit does not change
 the results (bit-identical at 3072 and 7000 MB, docs/optuna2_plan.md).
 
+A run that turns NaN (its validation y R2, or its training loss up to the end when the evaluation
+of the NaN network stops the process with an error) counts as pruned, with the user attribute
+diverged_at, not as failed: TPE ignores failed trials, so it could propose the same region again,
+while it ranks pruned trials with the bad ones. The median pruner uses complete trials only.
+
 The study is stored in an Optuna journal file (runs/<name>/study.log), so it can be paused and
 resumed. SQLite (--storage sqlite, runs/<name>/study.db) is kept for a single worker only: with the
 Python sqlite3 driver the "still queued?" check and the switch to running are not one transaction,
@@ -329,6 +334,28 @@ def failed(trial, msg):
     return RuntimeError("trial %d: %s" % (trial.number, msg))
 
 
+def diverged(trial, step):
+    """A run that turned NaN counts as pruned, not failed: TPE ranks pruned trials with the bad ones
+    (one without validation values last), while it ignores failed trials and could propose the same
+    region again. The median pruner uses complete trials only, so it is not affected."""
+    trial.set_user_attr("diverged_at", int(step))
+    return optuna.TrialPruned("diverged (NaN) at step %d" % step)
+
+
+def nan_loss_step(run_dir):
+    """First logged step from which the total training loss stays non-finite up to the last row of
+    train_log.csv; None if the last logged loss is finite or not logged."""
+    rows = [r for r in read_rows(os.path.join(run_dir, "train_log.csv")) if r.get("total") not in (None, "")]
+    if not rows or math.isfinite(as_float(rows[-1]["total"])):
+        return None
+    step = int(rows[-1]["step"])
+    for r in reversed(rows):
+        if math.isfinite(as_float(r["total"])):
+            break
+        step = int(r["step"])
+    return step
+
+
 def make_objective(args):
     space = space_of(args).params
 
@@ -340,13 +367,13 @@ def make_objective(args):
         trial.set_user_attr("run_name", run_name)
         trial.set_user_attr("worker", args.worker_id)
         sets = overrides(p, N_FIXED["b"]) + ["train.steps=%d" % args.steps, "phase2.eval_every=%d" % args.eval_every]
-        last, diverged = {}, []
+        last, nan_at = {}, []
 
         def on_eval(row):
             step, r2 = int(row["step"]), as_float(row["y_c1_r2"])
             last.update(row)
             if not math.isfinite(r2):
-                diverged.append(step)
+                nan_at.append(step)
                 return True
             trial.report(r2, step)
             return step < args.steps and trial.should_prune()  # the last value is the result, not a check
@@ -362,11 +389,14 @@ def make_objective(args):
         if last:  # single-case metrics of the last validation (all a pruned trial has)
             trial.set_user_attr("y_r2_case_mean", as_float(last.get("y_c1_r2_case_mean")))
             trial.set_user_attr("y_r2_case_min", as_float(last.get("y_c1_r2_case_min")))
-        if diverged:
-            raise failed(trial, "non-finite validation y R2 at step %d" % diverged[0])
+        if nan_at:
+            raise diverged(trial, nan_loss_step(run_dir) or nan_at[0])
         if status == "stopped":
             raise optuna.TrialPruned()
         if status == "failed":
+            step = nan_loss_step(run_dir)
+            if step is not None:  # evaluating a NaN network stops the training process with an error
+                raise diverged(trial, step)
             raise failed(trial, "the training process failed, see %s/stdout.txt" % run_name)
         try:
             res = run_result(run_dir)
@@ -376,7 +406,7 @@ def make_objective(args):
             if k != "y_r2":
                 trial.set_user_attr(k, v)
         if not math.isfinite(res["y_r2"]):
-            raise failed(trial, "non-finite validation y R2")
+            raise diverged(trial, nan_loss_step(run_dir) or args.steps)
         return res["y_r2"]
 
     return objective
@@ -435,18 +465,20 @@ def elapsed_hours(trials):
 
 
 def activation_table(trials, activations, space=None):
-    """Per activation: trials by state, best and median final y R2 of the complete trials, and the
-    median y R2 at the first pruning check (5 000 steps), which every trial reached."""
+    """Per activation: trials by state (the diverged ones, NaN, are counted as pruned and also on their
+    own), best and median final y R2 of the complete trials, and the median y R2 at the first pruning
+    check (5 000 steps) of the trials that reached it."""
     space = space or SPACES["b1"]
-    lines = ["| activation | complete / pruned / failed | best y R2 | median y R2 | median at 5000 steps (all) |",
-             "|---|---|---|---|---|"]
+    lines = ["| activation | complete / pruned / failed | diverged (NaN) | best y R2 | median y R2 | median at 5000 steps |",
+             "|---|---|---|---|---|---|"]
     for a in activations:
         ts = [t for t in trials if t.params.get("activation") == a]
         done = [t.value for t in ts if t.state == TrialState.COMPLETE]
         first = [t.intermediate_values[5000] for t in ts if 5000 in t.intermediate_values]
         n = [sum(t.state == s for t in ts) for s in (TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL)]
-        lines.append("| %s | %d / %d / %d | %s | %s | %s |" % (
-            act_name(space, a), *n, "%.4f" % max(done) if done else "-", "%.4f" % statistics.median(done) if done else "-",
+        lines.append("| %s | %d / %d / %d | %d | %s | %s | %s |" % (
+            act_name(space, a), *n, sum("diverged_at" in t.user_attrs for t in ts),
+            "%.4f" % max(done) if done else "-", "%.4f" % statistics.median(done) if done else "-",
             "%.4f" % statistics.median(first) if first else "-"))
     return "\n".join(lines)
 
@@ -466,13 +498,17 @@ def print_report(study, top=None, importance=False, space=None):
         step, r2 = _last_report(t)
         ua = t.user_attrs
         print("| %d%s | %s | %.4f | %.4f | %.4f (%s) | %d | %.1f | %s | %s |" % (
-            t.number, " (%s)" % space.reference_label if same_as(t.params, space.reference) else "", t.state.name.lower(),
+            t.number, " (%s)" % space.reference_label if same_as(t.params, space.reference) else "",
+            "diverged" if "diverged_at" in t.user_attrs else t.state.name.lower(),
             t.value if t.state == TrialState.COMPLETE else r2, ua.get("y_r2_case_mean", NAN),
             ua.get("y_r2_case_min", NAN), ua.get("worst_case", "-"), step, ua.get("wall_s", 0.0) / 60,
             ua.get("worker", "-"), fmt_params(t.params)))
     for t in trials:
         if t.state == TrialState.FAIL:
             print("failed trial %d: %s" % (t.number, t.user_attrs.get("error", "see the log")))
+        if "diverged_at" in t.user_attrs:
+            print("diverged trial %d (counted as pruned): NaN from step %d, %s" % (
+                t.number, t.user_attrs["diverged_at"], fmt_params(t.params)))
     print(activation_table(trials, space.params["activation"][1], space))
     if importance:
         imp = optuna.importance.get_param_importances(

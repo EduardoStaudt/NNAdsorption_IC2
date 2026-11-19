@@ -146,10 +146,17 @@ b = plan.get(run_name.split("/", 1)[1], plan.get("default"))
 steps, every = int(sets["train.steps"]), int(sets["phase2.eval_every"])
 with open(os.path.join(run_dir, "sets.json"), "w") as f:
     json.dump(sets, f)
+nan_from = b.get("nan_loss_from")
 with open(os.path.join(run_dir, "train_log.csv"), "w") as f:
-    f.write("step,elapsed_s\n%d,1.5\n" % steps)
+    if nan_from:  # total loss NaN from that step on
+        f.write("step,elapsed_s,total\n" + "".join("%d,1.5,%s\n" % (s, "nan" if s >= nan_from else 0.5)
+                                                   for s in range(500, steps + 1, 500)))
+    else:
+        f.write("step,elapsed_s\n%d,1.5\n" % steps)
 for k in range(every, steps + 1, every):
     time.sleep(b.get("sleep", 0.0))
+    if nan_from and k >= nan_from:
+        sys.exit(1)  # as train_phase2.py: the metrics of a NaN network stop the process with an error
     r2 = float("nan") if b.get("nan_at") == k else b["final"] * k / steps
     new = not os.path.exists(os.path.join(run_dir, "val_curve.csv"))
     with open(os.path.join(run_dir, "val_curve.csv"), "a", newline="") as f:
@@ -176,19 +183,19 @@ def fake_setup(tmp_path, plan):
     return ["--runs-dir", str(tmp_path / "runs"), "--poll-s", "0.02", "--train-script", str(tmp_path / "fake_train.py")]
 
 
-def load(study_dir, storage):
+def load(study_dir, storage, name=osb.STUDY_NAME):
     if storage == "journal":
         storage = optuna.storages.JournalStorage(optuna.storages.journal.JournalFileBackend(str(study_dir / "study.log")))
     else:
         storage = "sqlite:///%s" % (study_dir / "study.db")
-    return optuna.load_study(study_name=osb.STUDY_NAME, storage=storage)
+    return optuna.load_study(study_name=name, storage=storage)
 
 
 def test_study_prunes_fails_pauses_resumes_and_confirms(tmp_path, capsys):
     plan = {"t%04d" % i: {"final": 0.80 + 0.01 * i} for i in range(5)}  # pruner start-up trials
     plan["t0002"]["stop_file_at"] = 15000                 # STOP file: pause after trial 2
     plan["t0005"] = {"final": 0.30}                        # below the median at 5000 steps: pruned
-    plan["t0006"] = {"final": 0.90, "nan_at": 7500}        # diverges: failed
+    plan["t0006"] = {"final": 0.90, "nan_at": 7500}        # NaN validation y R2: diverged, counted as pruned
     plan["t0007"] = {"final": 0.90, "exit": 1}             # training process crashes: failed
     plan["t0008"] = {"final": 0.95}
     finals = {"confirm_b": {"current": (0.90, 0.91), "t0008": (0.93, 0.94), "t0004": (0.85, 0.86), "t0003": (0.84, 0.85)},
@@ -208,11 +215,12 @@ def test_study_prunes_fails_pauses_resumes_and_confirms(tmp_path, capsys):
     osb.main(["run", "--n-trials", "9", *common])  # resumes from the journal file
 
     study = load(study_dir, "journal")
-    assert [t.state for t in study.trials] == [S.COMPLETE] * 5 + [S.PRUNED, S.FAIL, S.FAIL, S.COMPLETE]
+    assert [t.state for t in study.trials] == [S.COMPLETE] * 5 + [S.PRUNED, S.PRUNED, S.FAIL, S.COMPLETE]
     assert osb.same_as_current(study.trials[0].params)
     assert max(study.trials[5].intermediate_values) == 5000  # first check after the warm-up
     assert study.trials[5].user_attrs["y_r2_case_mean"] == pytest.approx(0.30 / 3 - 0.05)  # from the last validation
-    assert "step 7500" in study.trials[6].user_attrs["error"]
+    assert study.trials[6].user_attrs["diverged_at"] == 7500 and "error" not in study.trials[6].user_attrs
+    assert "diverged_at" not in study.trials[7].user_attrs  # crash without NaN: failed
     assert study.best_trial.number == 8 and study.best_value == pytest.approx(0.95)
     ua = study.best_trial.user_attrs
     assert ua["y_r2_case_mean"] == pytest.approx(0.90) and ua["y_r2_case_min"] == pytest.approx(0.65) and ua["worst_case"] == 3
@@ -262,7 +270,7 @@ def test_second_study_starts_from_trial_26_and_reuses_its_confirmation(tmp_path,
 
     osb.main(["report", "--space", "b2", *common])
     out = capsys.readouterr().out
-    assert "0 (study1_t0026)" in out and "| activation | complete / pruned / failed |" in out
+    assert "0 (study1_t0026)" in out and "| activation | complete / pruned / failed | diverged (NaN) |" in out
     assert "| sin (SIREN init, w0 = 1) | " in out
 
     osb.main(["plot", "--space", "b2", "--out", str(tmp_path / "figs"), *common])
@@ -280,6 +288,44 @@ def test_second_study_starts_from_trial_26_and_reuses_its_confirmation(tmp_path,
     assert sorted(os.listdir(runs / "optuna_b" / "confirm_b")) == ["t0026_seed0", "t0026_seed1"]  # nothing new there
     sets = json.loads((runs / "optuna_b2" / "confirm_c" / "t0005_seed1" / "sets.json").read_text())
     assert sets["model.siren_w0"] == "1" and sets["runtime.gpu_memory_mb"] == "7000" and sets["runtime.seed"] == "1"
+
+
+def test_diverged_trials_count_as_pruned(tmp_path, capsys):
+    """A run that turns NaN is pruned, with the step where its loss went NaN: TPE ranks pruned trials
+    with the bad ones and ignores failed ones. A crash with a finite loss still fails."""
+    plan = {"t0000": {"final": 0.90},
+            "t0001": {"final": 0.90, "nan_at": 5000},         # NaN validation y R2
+            "t0002": {"final": 0.90, "nan_loss_from": 6000},  # NaN loss; the validation at 7500 stops the process
+            "t0003": {"final": 0.90, "exit": 1}}              # crash with a finite loss
+    common = fake_setup(tmp_path, plan)
+    osb.main(["run", "--space", "b2", "--n-trials", "4", *common])
+    trials = load(tmp_path / "runs" / "optuna_b2", "journal", "stage_b2").trials
+    assert [t.state for t in trials] == [S.COMPLETE, S.PRUNED, S.PRUNED, S.FAIL]
+    assert [t.user_attrs.get("diverged_at") for t in trials] == [None, 5000, 6000, None]
+    assert max(trials[2].intermediate_values) == 5000 and "error" in trials[3].user_attrs
+
+    capsys.readouterr()  # the report printed by run
+    osb.main(["report", "--space", "b2", *common])
+    out = capsys.readouterr().out
+    assert "diverged trial 1 (counted as pruned): NaN from step 5000" in out
+    assert "diverged trial 2 (counted as pruned): NaN from step 6000" in out
+    names = [osb.act_name(osb.SPACES["b2"], a) for a in osb.SPACE_B2["activation"][1]]
+    rows = [line.split(" | ") for line in out.splitlines() if line.split(" | ")[0][2:] in names]
+    assert len(rows) == 6 and sum(int(r[2]) for r in rows) == 2  # diverged column, one row per activation
+
+
+def test_nan_loss_step(tmp_path):
+    def first_nan(totals, header="step,elapsed_s,total"):
+        (tmp_path / "train_log.csv").write_text(
+            header + "\n" + "".join("%d,1.0,%s\n" % (100 * (i + 1), x) for i, x in enumerate(totals)))
+        return osb.nan_loss_step(str(tmp_path))
+
+    assert first_nan([0.5, 0.4, "nan", "nan"]) == 300
+    assert first_nan([0.5, "nan", 0.4, "inf"]) == 400  # the streak that reaches the end
+    assert first_nan(["nan", "nan"]) == 100
+    assert first_nan([0.5, "nan", 0.4]) is None  # finite again (the trainer skips non-finite steps)
+    assert first_nan([0.5, 0.4], header="step,elapsed_s,x") is None  # no total column
+    assert osb.nan_loss_step(str(tmp_path / "missing")) is None
 
 
 def study_args(tmp_path):
