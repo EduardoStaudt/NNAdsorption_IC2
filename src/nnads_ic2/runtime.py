@@ -7,6 +7,11 @@ Two machine-specific fixes live here:
 - TensorFloat-32 is on by default for float32 matmuls on recent GPUs. It keeps only ~10
   mantissa bits (relative error ~1e-3), which spoils the second derivatives of the PINN, so
   `setup_tf` turns it off unless the config asks for it.
+Run-to-run determinism (`runtime.deterministic`): every random draw of the package is seeded
+(numpy generators, Sobol scrambles, Keras initializers through `runtime.seed`), but GPU kernels
+may still add floating-point numbers in a different order from run to run; two runs of the same
+config then drift apart after ~1000 steps (Phase 3: y R2 0.927 vs 0.903). With the option on,
+TensorFlow (and XLA) only use deterministic GPU algorithms.
 """
 
 import importlib.util
@@ -56,7 +61,9 @@ def setup_tf(runtime_cfg):
             pass  # GPU already initialised (e.g. inside pytest); growth cannot change anymore
     dtype = runtime_cfg["dtype"]
     set_float_dtype(dtype)
-    tf.keras.utils.set_random_seed(int(runtime_cfg["seed"]))
+    tf.keras.utils.set_random_seed(int(runtime_cfg["seed"]))  # Python, NumPy and TensorFlow seeds
+    if runtime_cfg.get("deterministic"):
+        tf.config.experimental.enable_op_determinism()  # same results run after run (GPU included)
     return dtype
 
 

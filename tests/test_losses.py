@@ -146,3 +146,30 @@ def test_front_weight_is_the_sum_of_absolute_time_derivatives(example_case, floa
     w = LossBuilder(model, table, cfg, p_min=1e-6).front_weight(z, t, case).numpy()
     c_t = compute_fields(model, z, t, gather_cases(table, case))["c_t"].numpy()
     np.testing.assert_allclose(w, np.abs(c_t).sum(axis=1), rtol=1e-10)
+
+
+def test_setup_tf_turns_on_op_determinism_when_asked():
+    from tensorflow.python.framework import config as tf_config
+
+    from nnads_ic2 import runtime
+
+    was_on = tf_config.is_op_determinism_enabled()
+    try:
+        runtime.setup_tf(dict(seed=0, dtype="float32", tf32=False, deterministic=True))
+        assert tf_config.is_op_determinism_enabled()
+    finally:
+        if not was_on:
+            tf_config.disable_op_determinism()  # keep the other tests as they were
+
+
+def test_causal_slice_means_match_segment_means():
+    """The one-hot sums give the same slice means as tf.math.unsorted_segment_mean (empty slice: 0)."""
+    rng = np.random.default_rng(3)
+    t = tf.constant(rng.uniform(0.0, 1.5, (300, 1)), tf.float64)  # nothing in the last of 4 slices of [0, 2]
+    r2 = tf.constant(rng.uniform(0.0, 2.0, 300), tf.float64)
+    eps = 0.7
+    _, w_bins = causal_weights(t, tf.fill([300, 1], tf.constant(2.0, tf.float64)), r2, n_bins=4, eps=eps)
+    bins = np.minimum(np.floor(t.numpy()[:, 0] / 2.0 * 4).astype(int), 3)
+    L = tf.math.unsorted_segment_mean(r2, bins, 4).numpy()
+    np.testing.assert_allclose(w_bins.numpy(), np.exp(-eps * np.concatenate([[0.0], np.cumsum(L)[:-1]])), rtol=1e-12)
+    assert L[3] == 0.0

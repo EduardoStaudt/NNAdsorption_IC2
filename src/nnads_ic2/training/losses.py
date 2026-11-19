@@ -76,7 +76,10 @@ def causal_weights(t, t_final, r2, n_bins, eps, t_start=0.0):
     """
     bins = tf.cast(tf.floor((t[:, 0] - t_start) / (t_final[:, 0] - t_start) * n_bins), tf.int32)
     bins = tf.clip_by_value(bins, 0, n_bins - 1)
-    L = tf.math.unsorted_segment_mean(r2, bins, n_bins)
+    # mean residual of each slice as a one-hot product (not unsorted_segment_mean: under op
+    # determinism XLA turns that scatter into a serial loop, ~15x slower training)
+    onehot = tf.one_hot(bins, n_bins, dtype=r2.dtype)
+    L = tf.linalg.matvec(onehot, r2, transpose_a=True) / tf.maximum(tf.reduce_sum(onehot, axis=0), 1.0)
     w_bins = tf.stop_gradient(tf.exp(-eps * tf.cumsum(L, exclusive=True)))
     return tf.gather(w_bins, bins), w_bins
 
