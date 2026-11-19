@@ -266,7 +266,7 @@ def test_second_study_starts_from_trial_26_and_reuses_its_confirmation(tmp_path,
     assert len(study.trials) == 6 and osb.same_as(study.trials[0].params, osb.T26)
     sets = json.loads((runs / "optuna_b2" / "t0000" / "sets.json").read_text())
     assert sets["model.activation"] == "silu" and sets["model.depth"] == "8" and sets["model.fourier.n_features"] == "128"
-    assert sets["model.siren_w0"] == "1" and sets["runtime.gpu_memory_mb"] == "7000"  # every run of b2
+    assert sets["model.siren_w0"] == "1" and sets["runtime.gpu_memory_mb"] == str(osb.B2_GPU_MEM_MB)  # every run of b2
 
     osb.main(["report", "--space", "b2", *common])
     out = capsys.readouterr().out
@@ -287,7 +287,8 @@ def test_second_study_starts_from_trial_26_and_reuses_its_confirmation(tmp_path,
     assert sorted(os.listdir(runs / "optuna_b2" / "confirm_b")) == ["t%04d_seed%d" % (t, s) for t in (3, 4, 5) for s in (0, 1)]
     assert sorted(os.listdir(runs / "optuna_b" / "confirm_b")) == ["t0026_seed0", "t0026_seed1"]  # nothing new there
     sets = json.loads((runs / "optuna_b2" / "confirm_c" / "t0005_seed1" / "sets.json").read_text())
-    assert sets["model.siren_w0"] == "1" and sets["runtime.gpu_memory_mb"] == "7000" and sets["runtime.seed"] == "1"
+    assert sets["model.siren_w0"] == "1" and sets["runtime.gpu_memory_mb"] == str(osb.B2_GPU_MEM_MB)
+    assert sets["runtime.seed"] == "1"
 
 
 def test_diverged_trials_count_as_pruned(tmp_path, capsys):

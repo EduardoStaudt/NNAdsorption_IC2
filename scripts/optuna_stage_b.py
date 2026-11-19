@@ -11,7 +11,7 @@ Several trials can train at the same time on the GPU: `run --workers N` starts N
 the same study, each with its own sampler seed, so that they do not propose the same trial. Every
 trial has its own run directory and the usual training seeds, so its result depends only on its
 hyperparameters, not on the worker or on N. Each training process gets a fixed share of the GPU
-memory (--gpu-mem-mb, i.e. runtime.gpu_memory_mb). The default is the space's: 3072 MB for b1, 7000 MB
+memory (--gpu-mem-mb, i.e. runtime.gpu_memory_mb). The default is the space's: 3072 MB for b1, 6800 MB
 for b2, whose largest networks need up to 5.6 GB (run it with 2 workers). The limit does not change
 the results (bit-identical at 3072 and 7000 MB, docs/optuna2_plan.md).
 
@@ -80,7 +80,9 @@ STUDY_NAME = "stage_b"
 SEEDS = (0, 1)
 TOP = 3
 GPU_MEM_MB = 3072  # b1: largest network of its space (8 x 256, SiLU, 128 Fourier features, 4096 theta): peak 2.6 GB
-B2_GPU_MEM_MB = 7000  # b2, 2 workers: largest measured peak 5.6 GB (12 x 320, Mish, 256 Fourier features)
+# b2, 2 workers: largest measured peak 5.6 GB (12 x 320, Mish, 256 Fourier features). 2 x (6800 + about 260 MB
+# of CUDA context) = 14.1 GB, about 0.5 GB below what Windows leaves free (it uses 1.4 to 1.7 GB of 16.3 GB).
+B2_GPU_MEM_MB = 6800
 FINISHED = (TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL)
 BUSY = FINISHED + (TrialState.RUNNING,)  # counted against --n-trials, so that parallel workers do not overshoot
 NAN = float("nan")
