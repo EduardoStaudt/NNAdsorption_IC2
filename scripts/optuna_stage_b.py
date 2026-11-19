@@ -51,8 +51,10 @@ from optuna.trial import TrialState
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 TRAIN_SCRIPT = os.path.join(ROOT, "scripts", "train_phase2.py")
+# Both base configs have the hyperparameters of the model before the study (CURRENT): the study made
+# trial 26 the default of the stage configs (configs/phase2_base.yaml, docs/optuna_stage_b_results.md).
 CONFIG_B = "configs/optuna_stage_b.yaml"
-CONFIG_C = "configs/phase2_stage_c.yaml"
+CONFIG_C = "configs/phase2_stage_c_before_optuna.yaml"
 VAL_B = "data/provisorio_MOL_n2_stage_b_val20.h5"
 VAL_C = "data/provisorio_MOL_n2_stage_c_val20.h5"
 N_FIXED = {"b": 1, "c": 50}  # fixed collocation theta: the base case (b), the 50 training cases (c)
@@ -65,7 +67,7 @@ BUSY = FINISHED + (TrialState.RUNNING,)  # counted against --n-trials, so that p
 NAN = float("nan")
 FAILED_RUN = dict(y_r2=NAN, y_r2_case_mean=NAN, y_r2_case_min=NAN, worst_case=None)
 
-# The current model (as phase3c_long): the first trial of the study and the baseline of `confirm`.
+# The model before the study (as phase3c_long): the first trial of the study and the baseline of `confirm`.
 CURRENT = dict(depth=6, width=128, activation="tanh", n_fourier=64, fourier_scale=1.0, lr=1.0e-3,
                energy_weight=10.0, cauchy_c=10.0, n_theta=2048)
 BASE_SIGMA_Z, BASE_SIGMA_T = 2.0, 1.0  # Fourier sigmas of the current model (fourier_scale = 1)

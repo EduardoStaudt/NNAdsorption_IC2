@@ -3,7 +3,7 @@
 # runs: 15 000 steps, and the validation y R2 every 2 500 steps for the median pruner. Each trial
 # adds its sampled values with --set (network, Fourier features, activation, lr, energy weight,
 # Cauchy scale, number of theta). With no --set, a run is the current model.
-inherit: phase2_stage_b.yaml
+inherit: phase2_stage_b_before_optuna.yaml   # the hyperparameters before the Optuna study
 
 loss:
   weights:

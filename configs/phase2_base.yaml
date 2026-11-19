@@ -1,12 +1,34 @@
 # Phase 2: parametric PINN with collocation at theta drawn from the domain (no solver needed for
 # the residuals), dimension curriculum (stages a, b, c). Stage files set `domain` and the data.
 # Physics-only runs: --set loss.weights.data=0 (hybrid: outlet data, lambda_data capped at 10).
+#
+# Network, lr, energy weight, Cauchy loss and number of theta: trial 26 of the Optuna study on
+# stage (b), the default since 2026-11-19. With 2 seeds at 50 000 steps (physics only) it gave a
+# validation y R2 of 0.973 on stage (b) and 0.940 on stage (c), against 0.928 and 0.900 with the
+# values used before (docs/optuna_stage_b_results.md). Those values are in
+# phase2_stage_{b,c}_before_optuna.yaml, which the configs of Phases 3 and 4 and of the study inherit.
+# Stage (a) was not tested with the new values.
 inherit: pinn_parametric.yaml
 
+model:
+  depth: 8                # was 6
+  width: 224              # was 128
+  activation: silu        # was tanh
+  fourier:
+    n_features: 128       # was 64
+    sigma_z: 0.594870632675   # 2 x 0.2974 (Fourier scale of trial 26): lower frequencies, was 2.0
+    sigma_t: 0.297435316337   # 1 x 0.2974, was 1.0
+
+loss:
+  pde_terms: {energy: 2.227854425544}   # was 10 (the other terms keep weight 1)
+  robust_c: 24.348524168926   # Cauchy loss of the PDE residual in every stage (was: stage c only, c = 10)
+
 theta_colloc:             # training/theta_colloc.py
-  n_theta: 2048           # Sobol theta from the domain per draw (besides the training cases)
-  points_per_theta: 512   # initial (z~, t~) points per theta on average: a pool of ~1M points
-  resample_every_epochs: 10   # new theta every 10 passes over the pool (~2600 steps)
+  n_theta: 1024           # Sobol theta from the domain per draw (besides the training cases), was 2048
+  points_per_theta: 512   # initial (z~, t~) points per theta on average: a pool of ~0.5M points
+  # new theta every ~2600 steps as before (10 passes over the pool of 2049 rows): 10 x 2049 / 1025
+  # passes over the smaller pool with 1 fixed theta (the base case); stage (c) sets its own value
+  resample_every_epochs: 19.990243902439
   seed: 1
   scaler_n_theta: 8192    # Sobol theta used to fit the theta normalization (fixed for the run)
   front_frac: 0.0         # > 0: this fraction of the points of each renewal near the fronts (sum_i |dc~_i/dt~|)
@@ -24,6 +46,7 @@ phase2:
 
 train:
   steps: 50000
+  lr: 0.000621131634      # peak of the cosine decay, was 1.0e-3
   jit_compile: true       # XLA: 9.4 ms/step instead of 34 ms/step on the Phase 1 setup (same losses)
 
 logging:

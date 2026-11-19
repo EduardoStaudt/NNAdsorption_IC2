@@ -1,0 +1,25 @@
+# Stage (b) with the hyperparameters used until the Optuna study of 2026-11-19 (Phases 2 to 4): the
+# defaults in phase2_base.yaml changed to trial 26 of the study (docs/optuna_stage_b_results.md).
+# The configs of Phase 3 on stage (b) and of the study inherit this file, so they still describe
+# their runs.
+inherit: phase2_stage_b.yaml
+
+model:
+  depth: 6
+  width: 128
+  activation: tanh
+  fourier:
+    n_features: 64
+    sigma_z: 2.0
+    sigma_t: 1.0
+
+loss:
+  pde_terms: {energy: 10.0}
+  robust_c: null          # Cauchy loss off in stage (b) (the study config and the Phase 3 ablation turn it on)
+
+theta_colloc:
+  n_theta: 2048
+  resample_every_epochs: 10
+
+train:
+  lr: 1.0e-3

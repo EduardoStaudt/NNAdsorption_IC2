@@ -2,7 +2,7 @@
 # residual, lr 1e-3 with cosine decay, 6 x 128 net, 2048 Sobol theta renewed every 10 epochs)
 # trained for 200 000 steps instead of 50 000 (the learning-rate decay spans the 200 000 steps),
 # with the validation curve every 25 000 steps and a checkpoint every 10 000 (all kept).
-inherit: phase2_stage_c.yaml
+inherit: phase2_stage_c_before_optuna.yaml   # the hyperparameters before the Optuna study
 
 train:
   steps: 200000

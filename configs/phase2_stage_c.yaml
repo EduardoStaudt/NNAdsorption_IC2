@@ -16,8 +16,12 @@ phase2:
 # its floor, 1e-6 mol/kg) or an isotherm that changes by orders of magnitude within +-40 K; there
 # q~* = q*/q_ref reaches 1e3-1e6 and the squared residual of a few points (1e7-8e9) outweighed all
 # the others: the plain mean-square runs blew up at lr 1e-3 and 3e-4 (docs/phase2_results.md).
-loss:
-  robust_c: 10.0
+# So the Cauchy loss (loss.robust_c, from phase2_base.yaml since the Optuna study) is needed here.
+
+theta_colloc:
+  # new theta every ~2600 steps, as with 2048 theta every 10 passes: 10 x (50 + 2048) / (50 + 1024)
+  # passes over the pool of the 50 fixed training theta and the 1024 Sobol theta
+  resample_every_epochs: 19.534450651769
 
 logging:
   run_name: phase2c

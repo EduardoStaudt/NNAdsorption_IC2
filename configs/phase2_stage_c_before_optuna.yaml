@@ -1,0 +1,25 @@
+# Stage (c) with the hyperparameters used until the Optuna study of 2026-11-19 (Phases 2 to 4): the
+# defaults in phase2_base.yaml changed to trial 26 of the study (docs/optuna_stage_b_results.md).
+# The configs of Phases 3 and 4 on stage (c) (the long run runs/phase3c_long and what starts from it)
+# and the stage (c) test of the study inherit this file, so they still describe their runs.
+inherit: phase2_stage_c.yaml
+
+model:
+  depth: 6
+  width: 128
+  activation: tanh
+  fourier:
+    n_features: 64
+    sigma_z: 2.0
+    sigma_t: 1.0
+
+loss:
+  pde_terms: {energy: 10.0}
+  robust_c: 10.0
+
+theta_colloc:
+  n_theta: 2048
+  resample_every_epochs: 10
+
+train:
+  lr: 1.0e-3

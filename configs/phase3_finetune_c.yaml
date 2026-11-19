@@ -3,7 +3,7 @@
 # dT_ratio and theta scaler), then add the outlet data at a fixed lambda_data = 0.1 (no annealing),
 # with a lower learning rate. With the v23b data: point data.path to it and --val to its validation
 # split. Steps and learning rate are first guesses.
-inherit: phase2_stage_c.yaml
+inherit: phase2_stage_c_before_optuna.yaml   # the hyperparameters before the Optuna study
 
 phase2:
   init_from: runs/phase3c_long

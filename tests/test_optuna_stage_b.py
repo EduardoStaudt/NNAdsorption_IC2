@@ -29,6 +29,21 @@ def test_current_parameters_change_nothing(stage):
     assert osb.same_as_current(osb.CURRENT)
 
 
+# Trial 26 of the study (docs/optuna_stage_b_results.md), confirmed on stages b and c.
+TRIAL_26 = dict(depth=8, width=224, activation="silu", n_fourier=128, fourier_scale=0.2974353163373616,
+                lr=0.0006211316335097482, energy_weight=2.227854425543525, cauchy_c=24.34852416892599, n_theta=1024)
+
+
+@pytest.mark.parametrize("config, stage", [("phase2_stage_a.yaml", "b"), ("phase2_stage_b.yaml", "b"),
+                                           ("phase2_stage_c.yaml", "c")])
+def test_stage_configs_default_to_trial_26(config, stage):
+    """The stage configs train trial 26, with the values of its confirmation runs (stage a: 1 fixed theta, as b)."""
+    path = os.path.join(REPO_ROOT, "configs", config)
+    base, cfg = load_config(path), load_config(path)
+    apply_overrides(cfg, osb.overrides(TRIAL_26, osb.N_FIXED[stage]))
+    assert cfg == base
+
+
 @pytest.mark.parametrize("stage", ["b", "c"])
 def test_theta_renewal_period_does_not_depend_on_n_theta(stage):
     """Renewal period in steps as in ThetaCollocation: resample_every_epochs x pool / n_interior.
