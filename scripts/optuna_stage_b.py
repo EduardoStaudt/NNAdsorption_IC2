@@ -20,12 +20,20 @@ and 4 workers started together all took the same queued trial (the journal recor
 owns each running trial). The study processes do not import TensorFlow and hold no GPU memory: they
 start the training processes and read their val_curve.csv and summary.json.
 
+Two search spaces (--space): b1, the first study (runs/optuna_b, docs/optuna_stage_b.md), and b2,
+the second one (runs/optuna_b2, docs/optuna2_plan.md): more activations and wider ranges where
+trial 26 of the first study sat at the edge. Trial 0 of each study is its reference: the model
+before the study (b1) or trial 26 of the first study (b2).
+
 Commands, from the repository root inside WSL (~/ic2env/bin/python):
     python scripts/optuna_stage_b.py run --n-trials 60 --workers 3   start, or resume until 60 trials
     python scripts/optuna_stage_b.py report [--importance]            table of the trials
-    python scripts/optuna_stage_b.py confirm --workers 3              the top 3 trials and the current
-        model, 2 seeds each, 50 000 steps; if the best of the 3 beats the current model, both go to
-        stage (c) with 2 seeds each, 50 000 steps
+    python scripts/optuna_stage_b.py plot --out DIR                    y R2 against each parameter
+    python scripts/optuna_stage_b.py confirm --workers 3              the top 3 trials and the
+        reference, 2 seeds each, 50 000 steps; b1: if the best of the 3 beats the reference, both go
+        to stage (c) with 2 seeds each, 50 000 steps; b2: the best of the 3 always goes to stage (c),
+        and the runs of trial 26 from the first confirmation are reused (same config, deterministic)
+Add --space b2 to each command for the second study.
 
 Pause: create runs/<name>/STOP. Each worker finishes its running trial, then stops. Delete the file
 and run the same command again to resume. If a study process is killed, its training processes get
@@ -44,6 +52,7 @@ import statistics
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 
 import optuna
 from optuna.trial import TrialState
@@ -72,6 +81,56 @@ CURRENT = dict(depth=6, width=128, activation="tanh", n_fourier=64, fourier_scal
                energy_weight=10.0, cauchy_c=10.0, n_theta=2048)
 BASE_SIGMA_Z, BASE_SIGMA_T = 2.0, 1.0  # Fourier sigmas of the current model (fourier_scale = 1)
 BASE_N_THETA, BASE_EPOCHS = 2048, 10   # theta renewed every 10 passes over the pool
+# Trial 26 of the first study, the default of the stage configs since then: trial 0 of the second study.
+T26 = dict(depth=8, width=224, activation="silu", n_fourier=128, fourier_scale=0.2974353163373616,
+           lr=0.0006211316335097482, energy_weight=2.227854425543525, cauchy_c=24.34852416892599, n_theta=1024)
+
+# Search spaces, parameter -> ("int", low, high, step) | ("log", low, high) | ("cat", choices). The order
+# is the order of the suggest calls; fourier_scale is only sampled with Fourier features.
+SPACE_B1 = {
+    "depth": ("int", 4, 8, 1),
+    "width": ("int", 64, 256, 32),
+    "activation": ("cat", ("tanh", "silu")),
+    "n_fourier": ("cat", (0, 32, 64, 128)),
+    "fourier_scale": ("log", 0.25, 4.0),
+    "lr": ("log", 1.0e-4, 3.0e-3),
+    "energy_weight": ("log", 1.0, 100.0),
+    "cauchy_c": ("log", 1.0, 100.0),
+    "n_theta": ("cat", (512, 1024, 2048, 4096)),
+}
+SPACE_B2 = {
+    "depth": ("int", 6, 12, 1),
+    "width": ("int", 128, 320, 32),
+    "activation": ("cat", ("tanh", "silu", "gelu", "softplus", "mish", "sin")),
+    "n_fourier": ("cat", (64, 128, 256)),
+    "fourier_scale": ("log", 0.05, 1.0),
+    "lr": ("log", 2.0e-4, 2.0e-3),
+    "energy_weight": ("log", 0.3, 10.0),
+    "cauchy_c": ("log", 5.0, 60.0),
+    "n_theta": ("cat", (512, 1024, 2048)),
+}
+
+
+@dataclass(frozen=True)
+class Space:
+    study_name: str
+    default_dir: str      # study directory under the runs directory
+    params: dict
+    reference: dict       # trial 0 of the study and the baseline of `confirm`
+    reference_label: str
+    reference_runs: str   # "": `confirm` trains the reference; else its runs ("<runs>/confirm_<stage>/..._seed<seed>")
+    stage_c_always: bool  # False: the best goes to stage (c) only if it beats the reference on stage (b)
+
+
+SPACES = {
+    "b1": Space("stage_b", "optuna_b", SPACE_B1, CURRENT, "current", "", False),
+    "b2": Space("stage_b2", "optuna_b2", SPACE_B2, T26, "study1_t0026", "optuna_b/confirm_%s/t0026_seed%d", True),
+}
+
+
+def space_of(args):
+    return SPACES[getattr(args, "space", "b1")]
+
 
 if sys.platform.startswith("linux"):
     import ctypes
@@ -81,20 +140,19 @@ else:
     _PRCTL = None
 
 
-def suggest(trial):
-    """The search space. fourier_scale multiplies both Fourier sigmas (only with Fourier features)."""
-    p = dict(
-        depth=trial.suggest_int("depth", 4, 8),
-        width=trial.suggest_int("width", 64, 256, step=32),
-        activation=trial.suggest_categorical("activation", ["tanh", "silu"]),
-        n_fourier=trial.suggest_categorical("n_fourier", [0, 32, 64, 128]),
-    )
-    if p["n_fourier"] > 0:
-        p["fourier_scale"] = trial.suggest_float("fourier_scale", 0.25, 4.0, log=True)
-    p["lr"] = trial.suggest_float("lr", 1.0e-4, 3.0e-3, log=True)
-    p["energy_weight"] = trial.suggest_float("energy_weight", 1.0, 100.0, log=True)
-    p["cauchy_c"] = trial.suggest_float("cauchy_c", 1.0, 100.0, log=True)
-    p["n_theta"] = trial.suggest_categorical("n_theta", [512, 1024, 2048, 4096])
+def suggest(trial, space=SPACE_B1):
+    """Sample one point of the search space. fourier_scale multiplies both Fourier sigmas (only with
+    Fourier features)."""
+    p = {}
+    for name, (kind, *a) in space.items():
+        if name == "fourier_scale" and p["n_fourier"] == 0:
+            continue
+        if kind == "int":
+            p[name] = trial.suggest_int(name, a[0], a[1], step=a[2])
+        elif kind == "log":
+            p[name] = trial.suggest_float(name, a[0], a[1], log=True)
+        else:
+            p[name] = trial.suggest_categorical(name, list(a[0]))
     return p
 
 
@@ -105,9 +163,13 @@ def full_params(params):
     return p
 
 
-def same_as_current(params):
+def same_as(params, reference):
     p = full_params(params)
-    return all(math.isclose(p[k], v) if isinstance(v, float) else p[k] == v for k, v in CURRENT.items())
+    return all(math.isclose(p[k], v) if isinstance(v, float) else p[k] == v for k, v in reference.items())
+
+
+def same_as_current(params):
+    return same_as(params, CURRENT)
 
 
 def yaml_number(x):
@@ -253,8 +315,10 @@ def failed(trial, msg):
 
 
 def make_objective(args):
+    space = space_of(args).params
+
     def objective(trial):
-        p = suggest(trial)
+        p = suggest(trial, space)
         run_name = "%s/t%04d" % (args.name, trial.number)
         run_dir = os.path.join(args.runs_dir, run_name)
         fresh_dir(run_dir)
@@ -320,7 +384,7 @@ def make_storage(args):
 
 def open_study(args, seed=0):
     return optuna.create_study(
-        study_name=STUDY_NAME, storage=make_storage(args), direction="maximize", load_if_exists=True,
+        study_name=space_of(args).study_name, storage=make_storage(args), direction="maximize", load_if_exists=True,
         sampler=optuna.samplers.TPESampler(seed=seed, multivariate=True, group=True, constant_liar=True),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2 * args.eval_every),
     )
@@ -355,7 +419,24 @@ def elapsed_hours(trials):
     return (max(t.datetime_complete for t in done) - min(t.datetime_start for t in done)).total_seconds() / 3600
 
 
-def print_report(study, top=None, importance=False):
+def activation_table(trials, activations):
+    """Per activation: trials by state, best and median final y R2 of the complete trials, and the
+    median y R2 at the first pruning check (5 000 steps), which every trial reached."""
+    lines = ["| activation | complete / pruned / failed | best y R2 | median y R2 | median at 5000 steps (all) |",
+             "|---|---|---|---|---|"]
+    for a in activations:
+        ts = [t for t in trials if t.params.get("activation") == a]
+        done = [t.value for t in ts if t.state == TrialState.COMPLETE]
+        first = [t.intermediate_values[5000] for t in ts if 5000 in t.intermediate_values]
+        n = [sum(t.state == s for t in ts) for s in (TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL)]
+        lines.append("| %s | %d / %d / %d | %s | %s | %s |" % (
+            a, *n, "%.4f" % max(done) if done else "-", "%.4f" % statistics.median(done) if done else "-",
+            "%.4f" % statistics.median(first) if first else "-"))
+    return "\n".join(lines)
+
+
+def print_report(study, top=None, importance=False, space=None):
+    space = space or SPACES["b1"]
     trials = study.get_trials(deepcopy=False)
     counts = ", ".join("%s %d" % (s.name.lower(), n) for s in TrialState if (n := sum(t.state == s for t in trials)))
     print("study %s: %s | sum of trial times %.2f h, elapsed %.2f h" % (
@@ -369,13 +450,14 @@ def print_report(study, top=None, importance=False):
         step, r2 = _last_report(t)
         ua = t.user_attrs
         print("| %d%s | %s | %.4f | %.4f | %.4f (%s) | %d | %.1f | %s | %s |" % (
-            t.number, " (current)" if same_as_current(t.params) else "", t.state.name.lower(),
+            t.number, " (%s)" % space.reference_label if same_as(t.params, space.reference) else "", t.state.name.lower(),
             t.value if t.state == TrialState.COMPLETE else r2, ua.get("y_r2_case_mean", NAN),
             ua.get("y_r2_case_min", NAN), ua.get("worst_case", "-"), step, ua.get("wall_s", 0.0) / 60,
             ua.get("worker", "-"), fmt_params(t.params)))
     for t in trials:
         if t.state == TrialState.FAIL:
             print("failed trial %d: %s" % (t.number, t.user_attrs.get("error", "see the log")))
+    print(activation_table(trials, space.params["activation"][1]))
     if importance:
         imp = optuna.importance.get_param_importances(
             study, evaluator=optuna.importance.FanovaImportanceEvaluator(seed=0))
@@ -384,7 +466,7 @@ def print_report(study, top=None, importance=False):
 
 def worker_command(args, i):
     return [sys.executable, os.path.abspath(__file__), "worker", "--worker-id", str(i), "--name", args.name,
-            "--runs-dir", args.runs_dir, "--storage", args.storage, "--eval-every", str(args.eval_every),
+            "--space", args.space, "--runs-dir", args.runs_dir, "--storage", args.storage, "--eval-every", str(args.eval_every),
             "--poll-s", str(args.poll_s), "--gpu-mem-mb", str(args.gpu_mem_mb), "--train-script", args.train_script,
             "--n-trials", str(args.n_trials), "--steps", str(args.steps)]
 
@@ -411,7 +493,7 @@ def cmd_run(args):
         sys.exit("%s exists: delete it to run the study" % stop_path)
     recover_interrupted(study)
     if not study.trials:
-        study.enqueue_trial(dict(CURRENT))  # the current model first: a reference for the pruner
+        study.enqueue_trial(dict(space_of(args).reference))  # the reference first: a baseline for the pruner
     n = min(args.workers, args.n_trials - len(study.get_trials(deepcopy=False, states=BUSY)))
     procs = []
     for i in range(max(n, 0)):
@@ -420,7 +502,7 @@ def cmd_run(args):
     for proc, log in procs:
         proc.wait()
         log.close()
-    print_report(study, top=10)
+    print_report(study, top=10, space=space_of(args))
 
 
 def cmd_worker(args):
@@ -433,11 +515,23 @@ def cmd_worker(args):
                    callbacks=[optuna.study.MaxTrialsCallback(args.n_trials, states=BUSY), stop_file_callback(stop_path)])
 
 
+def confirm_run_name(args, stage, label, seed):
+    """Run name of one confirmation run. The reference of the second study (trial 26) already has its
+    confirmation runs from the first study, with the same config: training is deterministic, so they
+    are reused while their summary.json exists (never trained again in the first study's directory)."""
+    space = space_of(args)
+    if label == space.reference_label and space.reference_runs:
+        old = space.reference_runs % (stage, seed)
+        if os.path.exists(os.path.join(args.runs_dir, old, "summary.json")):
+            return old
+    return "%s/confirm_%s/%s_seed%d" % (args.name, stage, label, seed)
+
+
 def run_once(args, stage, label, p, seed):
     """One confirmation run (args.confirm_steps steps, physics only). A run whose summary.json exists
     is not trained again, so `confirm` can be resumed. Returns its metrics (NaN if it failed)."""
     config, val = (CONFIG_B, VAL_B) if stage == "b" else (CONFIG_C, VAL_C)
-    run_name = "%s/confirm_%s/%s_seed%d" % (args.name, stage, label, seed)
+    run_name = confirm_run_name(args, stage, label, seed)
     run_dir = os.path.join(args.runs_dir, run_name)
     if not os.path.exists(os.path.join(run_dir, "summary.json")):
         fresh_dir(run_dir)
@@ -471,12 +565,12 @@ def mean_or_minus_inf(values):
     return m if math.isfinite(m) else -math.inf
 
 
-def decide(y_r2):
-    """{label: validation y R2 per seed} of stage (b) -> (best label other than 'current', whether its
-    mean beats the mean of the current model). A failed run (NaN) makes its mean -inf."""
+def decide(y_r2, reference="current"):
+    """{label: validation y R2 per seed} of stage (b) -> (best label other than the reference, whether
+    its mean beats the mean of the reference). A failed run (NaN) makes its mean -inf."""
     mean = {k: mean_or_minus_inf(v) for k, v in y_r2.items()}
-    best = max((k for k in mean if k != "current"), key=mean.get)
-    return best, bool(mean[best] > mean["current"])
+    best = max((k for k in mean if k != reference), key=mean.get)
+    return best, bool(mean[best] > mean[reference])
 
 
 def print_confirm(res):
@@ -496,11 +590,12 @@ def print_confirm(res):
 
 
 def cmd_confirm(args):
+    space = space_of(args)
     study = open_study(args)
     done = sorted(study.get_trials(deepcopy=False, states=(TrialState.COMPLETE,)), key=lambda t: t.value, reverse=True)
-    top = [t for t in done if not same_as_current(t.params)][:TOP]
+    top = [t for t in done if not same_as(t.params, space.reference)][:TOP]
     if not top:
-        sys.exit("no complete trial other than the current model")
+        sys.exit("no complete trial other than the reference")
     out_path = os.path.join(args.runs_dir, args.name, "confirm.json")
     res = dict(steps=args.confirm_steps, seeds=list(SEEDS), workers=args.workers, stage_b={}, stage_c={})
 
@@ -508,30 +603,146 @@ def cmd_confirm(args):
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(res, f, indent=2)
 
-    labelled = [("current", dict(CURRENT))] + [("t%04d" % t.number, full_params(t.params)) for t in top]
+    ref = space.reference_label
+    labelled = [(ref, dict(space.reference))] + [("t%04d" % t.number, full_params(t.params)) for t in top]
     t0 = time.time()
     runs = run_many(args, "b", labelled)
-    res["stage_b"] = {label: dict(params=p, y_r2=[r["y_r2"] for r in runs[label]], runs=runs[label]) for label, p in labelled}
+    res["stage_b"] = {label: dict(params=p, y_r2=[r["y_r2"] for r in runs[label]], runs=runs[label],
+                                  run_names=[confirm_run_name(args, "b", label, s) for s in SEEDS]) for label, p in labelled}
     res["stage_b_wall_s"] = time.time() - t0
-    best, go = decide({k: v["y_r2"] for k, v in res["stage_b"].items()})
+    best, beats = decide({k: v["y_r2"] for k, v in res["stage_b"].items()}, reference=ref)
+    go = beats or space.stage_c_always
     res["decision"] = dict(best=best, stage_c=go)
     save()
     if go:
-        labelled = [(label, res["stage_b"][label]["params"]) for label in ("current", best)]
+        labelled = [(label, res["stage_b"][label]["params"]) for label in (ref, best)]
         t0 = time.time()
         runs = run_many(args, "c", labelled)
-        res["stage_c"] = {label: dict(params=p, y_r2=[r["y_r2"] for r in runs[label]], runs=runs[label]) for label, p in labelled}
+        res["stage_c"] = {label: dict(params=p, y_r2=[r["y_r2"] for r in runs[label]], runs=runs[label],
+                                      run_names=[confirm_run_name(args, "c", label, s) for s in SEEDS])
+                          for label, p in labelled}
         res["stage_c_wall_s"] = time.time() - t0
         save()
     print_confirm(res)
 
 
+PALETTE = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300")  # one per activation, in space order
+MARKERS = ("s", "o", "^", "D", "v", "P")
+INK, MUTED, RULE = "#0b0b0b", "#52514e", "#dcdcd6"
+LABELS = dict(depth="Trunk depth (layers)", width="Trunk width (neurons per layer)", activation="Activation",
+              n_fourier="Fourier features (frequencies)", fourier_scale="Fourier scale (multiplies sigma_z = 2, sigma_t = 1)",
+              lr="Maximum learning rate", energy_weight="Energy weight", cauchy_c="Cauchy scale c",
+              n_theta="Sobol theta per draw")
+
+
+def describe(kind, a):
+    if kind == "int":
+        return "uniform integer, %d to %d%s" % (a[0], a[1], ", step %d" % a[2] if a[2] > 1 else "")
+    if kind == "log":
+        return "log-uniform, %g to %g" % (a[0], a[1])
+    return "categorical, %d choices" % len(a[0])
+
+
+def log_ticks(low, high):
+    """Ticks of a log axis: the two ends of the range and the 1-2-5 values between them that are at
+    least a quarter of a decade away from the ends."""
+    inside = [m * 10.0 ** k for k in range(-6, 4) for m in (1, 2, 5)]
+    far = [v for v in inside if low < v < high and min(abs(math.log10(v / low)), abs(math.log10(high / v))) >= 0.25]
+    return [low] + far + [high]
+
+
+def cmd_plot(args):
+    """One scatter per parameter: final validation y R2 of every complete trial against its value,
+    marked by activation; the best trial is circled. Trials below --ymin sit on the bottom edge."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.patheffects as pe
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.ticker import NullFormatter
+
+    halo = [pe.withStroke(linewidth=2.5, foreground="white")]
+
+    space = space_of(args)
+    done = list(open_study(args).get_trials(deepcopy=False, states=(TrialState.COMPLETE,)))
+    if not done:
+        sys.exit("no complete trial")
+    best = max(done, key=lambda t: t.value)
+    acts = list(space.params["activation"][1])
+    top = max(t.value for t in done) + 0.012
+    os.makedirs(args.out, exist_ok=True)
+    for name, (kind, *a) in space.params.items():
+        ts = [t for t in done if name in t.params]
+        fig, ax = plt.subplots(figsize=(6.4, 3.5), dpi=150)
+
+        def x_of(t):
+            jitter = np.random.default_rng(t.number).uniform(-0.18, 0.18)
+            if kind == "cat":
+                return list(a[0]).index(t.params[name]) + jitter
+            if kind == "int":
+                return t.params[name] + jitter * a[2]
+            return t.params[name]
+
+        def label(text, t, y, dy, **kw):
+            """Text beside the point of t, on the side that stays inside the axes."""
+            v = x_of(t)
+            f = (v / max(len(a[0]) - 1, 1) if kind == "cat" else
+                 math.log(v / a[0]) / math.log(a[1] / a[0]) if kind == "log" else (v - a[0]) / (a[1] - a[0]))
+            ax.annotate(text, (v, y), xytext=(-7 if f > 0.75 else 7, dy), textcoords="offset points",
+                        ha="right" if f > 0.75 else "left", path_effects=halo, zorder=5, **kw)
+
+        for i, act in enumerate(acts):
+            group = [t for t in ts if t.params["activation"] == act]
+            if group:
+                ax.scatter([x_of(t) for t in group], [max(t.value, args.ymin + 0.004) for t in group], s=34,
+                           c=PALETTE[i], marker=MARKERS[i], edgecolors="white", linewidths=0.6, label=act, zorder=3)
+        for t in ts:
+            if t.value < args.ymin:  # off the scale: drawn on the bottom edge, with its value
+                label("t%d: %s" % (t.number, ("%.2f" % t.value).replace("-", "−")), t, args.ymin + 0.004, 3,
+                      fontsize=7, color=MUTED)
+            if t is best or same_as(t.params, space.reference):
+                y = max(t.value, args.ymin + 0.004)
+                if t is best:
+                    ax.scatter([x_of(t)], [y], s=150, facecolors="none", edgecolors=INK, linewidths=1.1, zorder=4)
+                label("t%d" % t.number, t, y, -12 if t is best else 4, fontsize=7.5, color=INK)
+        if kind == "cat":
+            ax.set_xticks(range(len(a[0])), [str(c) for c in a[0]])
+            ax.set_xlim(-0.6, len(a[0]) - 0.4)
+        else:
+            if kind == "log":
+                ax.set_xscale("log")
+                ax.set_xlim(a[0] / 1.25, a[1] * 1.25)
+                ticks = log_ticks(a[0], a[1])
+                ax.set_xticks(ticks, ["%g" % v for v in ticks])
+                ax.xaxis.set_minor_formatter(NullFormatter())
+                for edge in a[:2]:  # the limits of the sampled range (integers: the first and last tick)
+                    ax.axvline(edge, color=MUTED, linewidth=0.8, linestyle=(0, (3, 3)), zorder=1)
+            else:
+                ax.set_xticks(range(a[0], a[1] + 1, a[2]))
+                ax.set_xlim(a[0] - 0.6 * a[2], a[1] + 0.6 * a[2])
+        ax.set_ylim(args.ymin, top)
+        ax.grid(axis="y", color=RULE, linewidth=0.6, zorder=0)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(colors=MUTED, labelsize=8)
+        ax.set_xlabel("%s: %s" % (LABELS[name], describe(kind, a)), fontsize=8.5, color=INK)
+        ax.set_ylabel("validation y R² at %s steps" % format(args.steps, ",").replace(",", " "), fontsize=8.5, color=INK)
+        if name != "activation" and len({t.params["activation"] for t in ts}) > 1:
+            ax.legend(frameon=False, fontsize=8, loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=len(acts),
+                      handletextpad=0.3, columnspacing=1.2, borderaxespad=0.2)
+        fig.tight_layout()
+        fig.savefig(os.path.join(args.out, name + ".png"), facecolor="white")
+        plt.close(fig)
+    print("%d figures in %s (%d complete trials)" % (len(space.params), args.out, len(done)))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Optuna study of the stage (b) hyperparameters (see the module docstring).")
     sub = ap.add_subparsers(dest="command", required=True)
-    for name in ("run", "worker", "report", "confirm"):
+    for name in ("run", "worker", "report", "plot", "confirm"):
         sp = sub.add_parser(name)
-        sp.add_argument("--name", default="optuna_b", help="study directory under the runs directory")
+        sp.add_argument("--space", choices=sorted(SPACES), default="b1", help="search space: b1 (first study) or b2")
+        sp.add_argument("--name", default=None, help="study directory under the runs directory (default: of the space)")
         sp.add_argument("--runs-dir", default=os.path.join(ROOT, "runs"))
         sp.add_argument("--storage", choices=("journal", "sqlite"), default="journal",
                         help="journal file (default) or SQLite (a single worker only)")
@@ -550,11 +761,16 @@ def main(argv=None):
             sp.add_argument("--confirm-steps", type=int, default=50000)
         if name == "report":
             sp.add_argument("--importance", action="store_true", help="parameter importance (fANOVA)")
+        if name == "plot":
+            sp.add_argument("--out", required=True, help="directory of the figures (one PNG per parameter)")
+            sp.add_argument("--ymin", type=float, default=0.65, help="bottom of the y axis; lower trials sit on it")
+            sp.add_argument("--steps", type=int, default=15000, help="training steps per trial (axis label)")
     args = ap.parse_args(argv)
+    args.name = args.name or SPACES[args.space].default_dir
     args.runs_dir = os.path.abspath(args.runs_dir)
     args.train_script = os.path.abspath(args.train_script)
-    commands = dict(run=cmd_run, worker=cmd_worker, confirm=cmd_confirm,
-                    report=lambda a: print_report(open_study(a), importance=a.importance))
+    commands = dict(run=cmd_run, worker=cmd_worker, confirm=cmd_confirm, plot=cmd_plot,
+                    report=lambda a: print_report(open_study(a), importance=a.importance, space=space_of(a)))
     commands[args.command](args)
 
 

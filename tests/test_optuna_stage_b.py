@@ -81,6 +81,43 @@ def test_the_enqueued_trial_is_the_current_model():
     assert osb.suggest(study.ask()) == osb.CURRENT
 
 
+def test_space_b1_keeps_the_distributions_of_the_first_study():
+    D = optuna.distributions
+    study = optuna.create_study()
+    study.enqueue_trial(dict(osb.CURRENT))  # with Fourier features: all 9 parameters
+    trial = study.ask()
+    osb.suggest(trial)
+    assert trial.distributions == dict(
+        depth=D.IntDistribution(4, 8), width=D.IntDistribution(64, 256, step=32),
+        activation=D.CategoricalDistribution(["tanh", "silu"]), n_fourier=D.CategoricalDistribution([0, 32, 64, 128]),
+        fourier_scale=D.FloatDistribution(0.25, 4.0, log=True), lr=D.FloatDistribution(1.0e-4, 3.0e-3, log=True),
+        energy_weight=D.FloatDistribution(1.0, 100.0, log=True), cauchy_c=D.FloatDistribution(1.0, 100.0, log=True),
+        n_theta=D.CategoricalDistribution([512, 1024, 2048, 4096]))
+
+
+def test_search_space_b2():
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    acts = set()
+    for _ in range(300):
+        p = osb.suggest(study.ask(), osb.SPACE_B2)
+        assert 6 <= p["depth"] <= 12 and p["width"] in range(128, 321, 32)
+        assert p["n_fourier"] in (64, 128, 256) and 0.05 <= p["fourier_scale"] <= 1.0
+        assert 2.0e-4 <= p["lr"] <= 2.0e-3 and 0.3 <= p["energy_weight"] <= 10.0 and 5.0 <= p["cauchy_c"] <= 60.0
+        assert p["n_theta"] in (512, 1024, 2048)
+        acts.add(p["activation"])
+    assert acts == {"tanh", "silu", "gelu", "softplus", "mish", "sin"}
+
+
+def test_trial_26_is_inside_space_b2_and_its_first_trial():
+    assert osb.T26 == TRIAL_26
+    for name, (kind, *a) in osb.SPACE_B2.items():
+        v = osb.T26[name]
+        assert (v in a[0]) if kind == "cat" else (a[0] <= v <= a[1])
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=0, multivariate=True, group=True))
+    study.enqueue_trial(dict(osb.T26))
+    assert osb.suggest(study.ask(), osb.SPACE_B2) == osb.T26
+
+
 def test_read_rows_leaves_the_row_being_written(tmp_path):
     path = tmp_path / "curve.csv"
     path.write_text("step,y_c1_r2\r\n2500,0.5\r\n5000,0.6")
@@ -196,6 +233,49 @@ def test_study_prunes_fails_pauses_resumes_and_confirms(tmp_path, capsys):
     sets = json.loads((study_dir / "confirm_c" / "t0008_seed1" / "sets.json").read_text())
     assert sets["runtime.seed"] == "1" and sets["loss.weights.data"] == "0.0"
     assert not [d for d in os.listdir(study_dir / "confirm_b") if "_old_" in d]
+
+
+def test_second_study_starts_from_trial_26_and_reuses_its_confirmation(tmp_path, capsys):
+    plan = {"default": {"final": 0.90}}
+    plan.update({"t%04d" % i: {"final": 0.90 + 0.01 * i} for i in range(1, 6)})
+    finals = {"confirm_b": {"t0005": (0.95, 0.96), "t0004": (0.94, 0.95), "t0003": (0.93, 0.94)},
+              "confirm_c": {"t0005": (0.91, 0.92)}}
+    for stage, labels in finals.items():
+        for label, values in labels.items():
+            for seed, final in enumerate(values):
+                plan["%s/%s_seed%d" % (stage, label, seed)] = {"final": final}
+    common = fake_setup(tmp_path, plan)
+    runs = tmp_path / "runs"
+    for stage, values in (("b", (0.973, 0.972)), ("c", (0.941, 0.940))):  # trial 26 confirmed in the first study
+        for seed, y in enumerate(values):
+            d = runs / "optuna_b" / ("confirm_%s" % stage) / ("t0026_seed%d" % seed)
+            d.mkdir(parents=True)
+            (d / "summary.json").write_text(json.dumps(dict(validation=dict(outlet=dict(y_c1=dict(r2=y))), training={})))
+
+    osb.main(["run", "--space", "b2", "--n-trials", "6", *common])
+    storage = optuna.storages.JournalStorage(optuna.storages.journal.JournalFileBackend(str(runs / "optuna_b2" / "study.log")))
+    study = optuna.load_study(study_name="stage_b2", storage=storage)
+    assert len(study.trials) == 6 and osb.same_as(study.trials[0].params, osb.T26)
+    sets = json.loads((runs / "optuna_b2" / "t0000" / "sets.json").read_text())
+    assert sets["model.activation"] == "silu" and sets["model.depth"] == "8" and sets["model.fourier.n_features"] == "128"
+
+    osb.main(["report", "--space", "b2", *common])
+    out = capsys.readouterr().out
+    assert "0 (study1_t0026)" in out and "| activation | complete / pruned / failed |" in out
+
+    osb.main(["plot", "--space", "b2", "--out", str(tmp_path / "figs"), *common])
+    assert sorted(os.listdir(tmp_path / "figs")) == sorted(name + ".png" for name in osb.SPACE_B2)
+
+    osb.main(["confirm", "--space", "b2", "--confirm-steps", "1000", "--workers", "2", *common])
+    res = json.loads((runs / "optuna_b2" / "confirm.json").read_text())
+    assert list(res["stage_b"]) == ["study1_t0026", "t0005", "t0004", "t0003"]
+    assert res["stage_b"]["study1_t0026"]["y_r2"] == pytest.approx([0.973, 0.972])  # reused, not trained again
+    assert res["stage_b"]["study1_t0026"]["run_names"] == ["optuna_b/confirm_b/t0026_seed0", "optuna_b/confirm_b/t0026_seed1"]
+    assert res["decision"] == {"best": "t0005", "stage_c": True}  # below trial 26 on (b), still tested on (c)
+    assert res["stage_c"]["study1_t0026"]["y_r2"] == pytest.approx([0.941, 0.940])
+    assert res["stage_c"]["t0005"]["y_r2"] == pytest.approx([0.91, 0.92])
+    assert sorted(os.listdir(runs / "optuna_b2" / "confirm_b")) == ["t%04d_seed%d" % (t, s) for t in (3, 4, 5) for s in (0, 1)]
+    assert sorted(os.listdir(runs / "optuna_b" / "confirm_b")) == ["t0026_seed0", "t0026_seed1"]  # nothing new there
 
 
 def study_args(tmp_path):
