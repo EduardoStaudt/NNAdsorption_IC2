@@ -12,3 +12,4 @@ pyyaml==6.0.3
 h5py==3.14.0
 matplotlib==3.11.2
 pytest==9.2.0
+optuna==5.1.0           # hyperparameter study (scripts/optuna_stage_b.py), SQLite storage
