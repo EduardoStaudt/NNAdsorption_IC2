@@ -397,7 +397,7 @@ def main(argv=None):
         sp.add_argument("--name", default="optuna_b", help="study directory under the runs directory")
         sp.add_argument("--runs-dir", default=os.path.join(ROOT, "runs"))
         sp.add_argument("--eval-every", type=int, default=2500, help="steps between validations (pruner)")
-        sp.add_argument("--poll-s", type=float, default=10.0, help="seconds between reads of the validation curve")
+        sp.add_argument("--poll-s", type=float, default=2.0, help="seconds between reads of the validation curve")
         if name == "run":
             sp.add_argument("--n-trials", type=int, required=True, help="finished trials to reach")
             sp.add_argument("--steps", type=int, default=15000, help="training steps per trial")
