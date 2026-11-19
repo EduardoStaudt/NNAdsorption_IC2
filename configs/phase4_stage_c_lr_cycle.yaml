@@ -1,0 +1,17 @@
+# Phase 4, item 2a: a second learning-rate cycle for the long stage (c) run. Start from its final
+# weights (step 200 000; phase2.init_from also takes its network, dT_ratio and theta scaler) and
+# train 50 000 more steps with a restarted cosine decay from lr 3e-4 (fresh Adam state). Physics
+# only, same collocation as the long run.
+inherit: phase3_stage_c_long.yaml
+
+phase2:
+  init_from: runs/phase3c_long
+  eval_every: 10000
+
+train:
+  steps: 50000
+  lr: 3.0e-4
+
+logging:
+  run_name: phase4c_lr_cycle
+  ckpt_every: 10000
