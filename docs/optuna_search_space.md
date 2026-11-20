@@ -179,7 +179,7 @@ Table 2. Activations of the second study.
 | GELU | a Φ(a), Φ the normal distribution function | −0.17 to ∞ | close to SiLU (Keras default: the exact form with erf, not the tanh approximation) |
 | softplus | ln(1 + e^a) | 0 to ∞ | the smooth version of ReLU, with σ'' = s (1 − s), s the logistic sigmoid |
 | Mish | a tanh(ln(1 + e^a)) | −0.31 to ∞ | close to SiLU |
-| sin (SIREN) | sin(w0 (x W + b)), w0 = 30 | −1 to 1 | periodic: σ' and σ'' are sines and cosines too, so they do not fade for large inputs |
+| sin (SIREN init, w0 = 1) | sin(w0 (x W + b)), w0 = 1 in the second study (30 in the SIREN paper) | −1 to 1 | periodic: σ' and σ'' are sines and cosines too, so they do not fade for large inputs |
 
 Source: Keras 3 activations (tanh, silu, gelu, softplus, mish) and `SineDense` in
 `src/nnads_ic2/models/pinn.py`.
@@ -203,12 +203,16 @@ about 20 times smaller than Glorot weights of the same layer (uniform limit 0.00
 neurons). So at the same learning rate a SIREN weight changes about 20 times more, relative to its size,
 than a SiLU weight. I measured it: trial 26 with sin in place of SiLU diverged at its learning rate (6.2e-4). The
 outlet loss reached 1e8 by step 100 and every loss was NaN from step 300 on (runs/optuna_bench,
-`b2_act_sin`). In the study such a run stops with an error at its first validation (step 2500), the
-trial is recorded as failed, and the study goes on. Other learning rates and other values of w0, and
-how the second study handles this, are in `docs/optuna2_plan.md`.
+`b2_act_sin`). Lower learning rates with w0 = 30, and w0 = 5, did not learn in 2 500 steps either.
+Only w0 = 1 did (y R² 0.446 at 2 500 steps, `docs/optuna2_plan.md`, Table 4). So the second study
+ran every sine layer with w0 = 1 and the same initialization formula (hidden weights uniform in
+(−√(6/n), √(6/n)), the He uniform limit). That is not the SIREN of the paper, and the reports call
+it "sin (SIREN init, w0 = 1)". A run that turns NaN stops with an error at its first validation, and
+the study records it as pruned, with the step where it diverged (no trial of the second study did).
 
 The other activations keep the Glorot initialization of the first study. The search space of the second
-study, its protocol and its cost are in `docs/optuna2_plan.md`.
+study, its protocol and its cost are in `docs/optuna2_plan.md`, and its results in
+`docs/optuna2_results.md`.
 
 ## References
 

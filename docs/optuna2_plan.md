@@ -1,10 +1,11 @@
 # Second Optuna study on stage (b): plan and cost
 
-Prepared on 2026-11-19 (branch `pinn-v23b`). Not run yet. It waits for your approval of the estimate
-and of three decisions: the number of workers (GPU memory), the w0 of the sine layers, and how a
-diverged trial is recorded. The first study is explained in `docs/optuna_search_space.md` and its
-results are in `docs/optuna_stage_b_results.md`. Code: `scripts/optuna_stage_b.py --space b2`,
-tests `tests/test_optuna_stage_b.py`.
+Prepared on 2026-11-19 (branch `pinn-v23b`) and approved the same day with the three recommendations:
+2 workers, sin with w0 = 1, diverged trials recorded as pruned. At the launch I lowered the GPU memory
+per process from 7000 to 6800 MB (decision 1). The study ran on 2026-11-19 and the confirmation on
+2026-11-20. Results: `docs/optuna2_results.md`. The first study is explained in
+`docs/optuna_search_space.md` and its results are in `docs/optuna_stage_b_results.md`. Code:
+`scripts/optuna_stage_b.py --space b2`, tests `tests/test_optuna_stage_b.py`.
 
 ## Protocol
 
@@ -37,7 +38,7 @@ Table 1. Search space of the second study against the first.
 |---|---|---|---|---|---|
 | Depth | 4 to 8 | 6 to 12 | uniform integer | 8 | trial 26 was at the top of the range |
 | Width | 64 to 256, step 32 | 128 to 320, step 32 | uniform integer | 224 | kept around trial 26 |
-| Activation | tanh, SiLU | tanh, SiLU, GELU, softplus, Mish, sin (SIREN) | categorical | SiLU | smooth activations only |
+| Activation | tanh, SiLU | tanh, SiLU, GELU, softplus, Mish, sin (SIREN init, w0 = 1) | categorical | SiLU | smooth activations only |
 | Fourier features | 0, 32, 64, 128 | 64, 128, 256 | categorical | 128 | trial 26 had the largest choice |
 | Fourier scale | 0.25 to 4 | 0.05 to 1 | log-uniform | 0.297 | trial 26 was 6 % from the bottom |
 | Learning rate | 1e-4 to 3e-3 | 2e-4 to 2e-3 | log-uniform | 6.2e-4 | kept around trial 26 |
@@ -128,6 +129,13 @@ GB), and every network fits. Against C it loses at most about 13 % of the wall t
 1.36x), likely less, because large networks already keep the GPU busy. B leaves the largest Mish,
 SiLU and GELU networks out of memory, a part of the space TPE would keep proposing.
 
+**Approved: A, run at 6800 MB per process.** At the launch Windows used 1.4 to 1.7 GB of the card,
+not 1.3 GB. I measured one TF process at 7000 MB: 7.2 GB in all (7.26 GB with the modules of a
+training run), so two of them left about 0.1 GB free, and a new trial could have failed to get its
+memory. At 6800 MB (commit 678caf7) the largest measured peak (5.6 GB) still fits with a 21 % margin,
+two processes leave about 0.5 GB, and the limit does not change the results. With two trials
+running the card showed 15.5 of 16.3 GB in use.
+
 ## Decision 2: w0 of the sine layers (SIREN)
 
 The sine layers follow the SIREN paper (Sitzmann et al., 2020): y = sin(w0 (x W + b)), with the
@@ -167,6 +175,10 @@ Table 5. Options for the sine layers.
 | **B. w0 = 1, same initialization formula (recommended)** | `model.siren_w0=1` in every run of the second study (only sin uses it) | sin learns. Trial 26 and the other activations do not change |
 | C. w0 sampled for sin trials only | a 10th parameter, for example log-uniform 1 to 30 | spends sin trials on values that did not work here (w0 of 5 and 30) |
 
+**Approved: B** (commit 280dd68). The reports call this activation "sin (SIREN init, w0 = 1)": a sine
+layer with the SIREN initialization formula at w0 = 1, not the SIREN of the paper. Table 4 is the
+reason.
+
 ## Decision 3: how a diverged trial is recorded
 
 In the first study no trial diverged. In the code, a trial whose validation y R² turns NaN is
@@ -182,6 +194,8 @@ again (sin with w0 = 30 and a high learning rate, or a large network at the top 
   pruner is not affected (it uses complete trials only). The change is small: the objective also
   reads the training log, and a run whose loss is NaN there counts as diverged even when the process
   stops with an error. One new test. The report shows diverged trials in their own column.
+
+**Approved: B** (commit 21b88e4), with the number of diverged trials per activation in the report.
 
 ## Estimate
 
@@ -240,15 +254,17 @@ the best and median y R² per activation. I change no default without your appro
 
 ## Commands
 
-Run these inside WSL, from the repository root (shown with decision 1, option A):
+Run these inside WSL, from the repository root (as run: 2 workers, 6800 MB per process, the default
+of the b2 space). In a `bash -lc` string from Windows, add `; sleep 5` after the detached start, or
+the WSL session closes before the job starts:
 
 ```
 mkdir -p runs/optuna_b2
-(setsid nohup ~/ic2env/bin/python scripts/optuna_stage_b.py run --space b2 --n-trials 60 --workers 2 --gpu-mem-mb 7000 > runs/optuna_b2/run.out 2>&1 < /dev/null &)
+(setsid nohup ~/ic2env/bin/python scripts/optuna_stage_b.py run --space b2 --n-trials 60 --workers 2 > runs/optuna_b2/run.out 2>&1 < /dev/null &)
 ~/ic2env/bin/python scripts/optuna_stage_b.py report --space b2 --importance
 ~/ic2env/bin/python scripts/optuna_stage_b.py plot --space b2 --out docs/figures/optuna_b2
 touch runs/optuna_b2/STOP     # pause: each worker finishes its running trial
-~/ic2env/bin/python scripts/optuna_stage_b.py confirm --space b2 --workers 2 --gpu-mem-mb 7000
+(setsid nohup ~/ic2env/bin/python scripts/optuna_stage_b.py confirm --space b2 --workers 2 > runs/optuna_b2/confirm.out 2>&1 < /dev/null &)
 ```
 
 Each worker logs to `runs/optuna_b2/worker<i>.out`, and each trial to `runs/optuna_b2/t<number>/`.
