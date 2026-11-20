@@ -737,13 +737,17 @@ def cmd_plot(args):
                 return t.params[name] + jitter * a[2]
             return t.params[name]
 
-        def label(text, t, y, dy, **kw):
-            """Text beside the point of t, on the side that stays inside the axes."""
+        def frac(t):
+            """Position of the point of t across the axes, 0 to 1."""
             v = x_of(t)
-            f = (v / max(len(a[0]) - 1, 1) if kind == "cat" else
-                 math.log(v / a[0]) / math.log(a[1] / a[0]) if kind == "log" else (v - a[0]) / (a[1] - a[0]))
-            ax.annotate(text, (v, y), xytext=(-7 if f > 0.75 else 7, dy), textcoords="offset points",
-                        ha="right" if f > 0.75 else "left", path_effects=halo, zorder=5, **kw)
+            return (v / max(len(a[0]) - 1, 1) if kind == "cat" else
+                    math.log(v / a[0]) / math.log(a[1] / a[0]) if kind == "log" else (v - a[0]) / (a[1] - a[0]))
+
+        def label(text, t, y, dx, dy, flip=False, **kw):
+            """Text beside the point of t, on the side that stays inside the axes (the other side if flip)."""
+            right = (frac(t) <= 0.75) != flip
+            ax.annotate(text, (x_of(t), y), xytext=(dx if right else -dx, dy), textcoords="offset points",
+                        ha="left" if right else "right", path_effects=halo, zorder=5, **kw)
 
         for i, act in enumerate(acts):
             group = [t for t in ts if t.params["activation"] == act]
@@ -751,17 +755,22 @@ def cmd_plot(args):
                 ax.scatter([x_of(t) for t in group], [max(t.value, args.ymin + 0.004) for t in group], s=34,
                            c=PALETTE[i], marker=MARKERS[i], edgecolors="white", linewidths=0.6,
                            label=act_name(space, act), zorder=3)
-        for t in ts:
-            if t.value < args.ymin:  # off the scale: drawn on the bottom edge, with its value
-                label("t%d: %s" % (t.number, ("%.2f" % t.value).replace("-", "−")), t, args.ymin + 0.004, 3,
-                      fontsize=7, color=MUTED)
+        level, last = 0, None
+        for t in sorted((t for t in ts if t.value < args.ymin), key=frac):  # off the scale: on the bottom edge
+            level = level + 1 if last is not None and frac(t) - last < 0.15 else 0  # close labels stack up
+            last = frac(t)
+            label("t%d: %s" % (t.number, ("%.2f" % t.value).replace("-", "−")), t, args.ymin + 0.004, 7,
+                  3 + 9 * level, fontsize=7, color=MUTED)
+        for t in ts:  # the best trial (circled) and the reference, labelled on opposite sides of their points
             if t is best or same_as(t.params, space.reference):
                 y = max(t.value, args.ymin + 0.004)
                 if t is best:
                     ax.scatter([x_of(t)], [y], s=150, facecolors="none", edgecolors=INK, linewidths=1.1, zorder=4)
-                label("t%d" % t.number, t, y, -12 if t is best else 4, fontsize=7.5, color=INK)
+                label("t%d" % t.number, t, y, 10 if t is best else 6, 0, flip=t is not best, va="center",
+                      fontsize=7.5, color=INK)
         if kind == "cat":
-            ax.set_xticks(range(len(a[0])), [act_name(space, c) if name == "activation" else str(c) for c in a[0]])
+            ax.set_xticks(range(len(a[0])), [act_name(space, c).replace(" (", "\n(").replace(", w0", ",\nw0")
+                                             if name == "activation" else str(c) for c in a[0]])
             ax.set_xlim(-0.6, len(a[0]) - 0.4)
         else:
             if kind == "log":
