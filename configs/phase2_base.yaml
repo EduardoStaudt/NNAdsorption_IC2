@@ -41,6 +41,10 @@ phase2:
   data_seed: 0
   n_plots: 6
   eval_every: 0           # > 0: outlet metrics on the validation set every so many steps (val_curve.csv)
+  plateau_stop:           # validation curve flat: y R2 gained < min_gain over n_points evaluations in a row
+    enabled: false        # false: only record where it would have stopped (summary.json "plateau")
+    min_gain: 0.002
+    n_points: 2
   init_from: null         # trained run directory to start from (fine-tuning: its weights, network, dT_ratio, theta scaler)
   march_windows: 0        # > 0: time marching over this many equal windows of t~ (physics only, Phase 3 proof of concept)
 

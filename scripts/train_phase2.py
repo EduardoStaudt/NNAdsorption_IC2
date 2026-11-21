@@ -46,6 +46,7 @@ from nnads_ic2.experiment import (  # noqa: E402
 )
 from nnads_ic2.models.pinn import MarchedPINN, MarchingWindow  # noqa: E402
 from nnads_ic2.physics.scales import compute_scales, measured_temperature_rise  # noqa: E402
+from nnads_ic2.training.plateau import plateau_step  # noqa: E402
 from nnads_ic2.training.theta_colloc import ThetaCollocation  # noqa: E402
 from nnads_ic2.training.trainer import Trainer  # noqa: E402
 
@@ -212,6 +213,10 @@ def main():
         model.load_weights(os.path.join(init_dir, "model.weights.h5"))
     curve_path = os.path.join(run_dir, "val_curve.csv")
 
+    ps = {"enabled": False, "min_gain": 0.002, "n_points": 2, **(cfg["phase2"].get("plateau_stop") or {})}
+    curve = dict(steps=[], y=[])
+    plateau = {**ps, "would_stop_at": None}
+
     def periodic_eval(step):
         """Outlet metrics on the validation cases at this step (no internal fields, no plots)."""
         res = evaluate_set(model, cfg, scaler, dtype, dict(val, fields=None),
@@ -224,6 +229,13 @@ def main():
                 w.writeheader()
             w.writerow(row)
         print("validation at step %d: y R2 %.3f | T_out RMSE %.2f K" % (step, row["y_c1_r2"], row["T_out_rmse"]), flush=True)
+        curve["steps"].append(step)
+        curve["y"].append(row["y_c1_r2"])
+        hit = plateau_step(curve["steps"], curve["y"], ps["min_gain"], ps["n_points"])
+        if hit is not None and plateau["would_stop_at"] is None:
+            plateau["would_stop_at"] = hit
+            print("plateau criterion met at step %d (%s)" % (hit, "stopping" if ps["enabled"] else "recorded only"), flush=True)
+        return bool(ps["enabled"]) and hit is not None
 
     march = None
     if n_windows > 0:
@@ -254,6 +266,7 @@ def main():
                       final_lambdas=trainer.weights.as_dict(), final_causal_eps=float(trainer.causal.eps.numpy()),
                       pool_size=colloc.pool.size, **runtime.memory_peaks()),
         march=march,
+        plateau=dict(plateau, stopped_at=timing.get("stopped_at")) if eval_every > 0 else None,
     )
     if train["extra"] is not None:  # whole domain: also the Phase 1 validation seeds (comparison with Phase 1)
         summary["phase1_validation"] = evaluate_set(model, cfg, scaler, dtype, train["extra"],

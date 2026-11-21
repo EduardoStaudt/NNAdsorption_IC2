@@ -7,7 +7,8 @@ collocation points; with a `resampler` (training/theta_colloc.py) the collocatio
 replaced every `resampler.every_steps` steps. Every term of the loss, the weights and the time
 per step go to a CSV file (and TensorBoard if enabled); checkpoints every `ckpt_every` steps.
 An optional `evaluator(step)` runs every `eval_every` steps (validation curve); its time is kept
-out of the logged ms/step and reported apart (timing["periodic_eval_s"]).
+out of the logged ms/step and reported apart (timing["periodic_eval_s"]); if it returns True the
+Adam loop stops there (timing["stopped_at"]).
 """
 
 import csv
@@ -248,10 +249,13 @@ class Trainer:
                 self.ckpt_mgr.save()
             if self.evaluator is not None and self.eval_every > 0 and step % self.eval_every == 0:
                 t0 = time.time()
-                self.evaluator(step)
+                stop = self.evaluator(step)
                 spent = time.time() - t0
                 self.timing["periodic_eval_s"] = self.timing.get("periodic_eval_s", 0.0) + spent
                 t_last += spent  # not part of the next logged ms/step
+                if stop is True and step < self.steps:  # plateau stop (phase2.plateau_stop.enabled)
+                    self.timing["stopped_at"] = step
+                    break
         self.timing["adam_s"] = time.time() - t_start
         log_file.close()
         if self.cfg["train"]["lbfgs"]["enabled"]:
