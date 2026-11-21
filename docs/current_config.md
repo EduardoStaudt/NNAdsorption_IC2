@@ -1,11 +1,18 @@
 # Configuração atual do melhor modelo
 
-Desde o estudo Optuna de 19 de novembro de 2026, o padrão das etapas é o trial 26 do estudo, e o
-melhor modelo da etapa (c) é `runs/optuna_b/confirm_c/t0026_seed0`. Ele é só física, foi treinado
-por 50 mil passos e chega a y R² 0,941 nos 20 casos de validação da etapa (c). A Tabela 1 mostra o
-que mudou. Fora isso, a configuração é a do `phase3c_long`, que este documento descreve a partir
-da seção "O modelo phase3c_long". As únicas outras diferenças são 50 mil passos em vez de 200 mil,
-o modo determinístico ligado e checkpoints e avaliações mais frequentes.
+Desde o estudo Optuna de 19 de novembro de 2026, o padrão das etapas é o trial 26 do estudo. Desde a
+Fase 5 (21 de novembro), o melhor modelo da etapa (c) é `runs/phase5c_long_seed1`: o mesmo padrão
+treinado por 200 mil passos (`configs/phase5_stage_c_long.yaml`), só física, com y R² 0,962 nos 20
+casos de validação da etapa (c) (a outra seed deu 0,953). Antes era `runs/optuna_b/confirm_c/t0026_seed0`,
+com 50 mil passos e 0,941. A Tabela 1 mostra o que mudou em relação ao modelo antigo. Fora isso, a
+configuração é a do `phase3c_long`, que este documento descreve a partir da seção "O modelo
+phase3c_long". As únicas outras diferenças são o modo determinístico ligado e checkpoints e
+avaliações mais frequentes (a cada 25 mil passos no treino longo).
+
+Há também uma alternativa barata, registrada na Fase 5 mas que não é o padrão: a mesma configuração
+com rede de 6 × 128 (`configs/phase5_cheap_{b,c}.yaml`). Com 50 mil passos ela ficou 0,011 abaixo do
+padrão na etapa (b) e 0,012 abaixo na (c), com metade do tempo por passo (10 ms contra 20 ms). O
+fine-tune da híbrida (`configs/phase3_finetune_c.yaml`) parte de `runs/phase5c_long_seed1`.
 
 ## Mudanças do estudo Optuna
 

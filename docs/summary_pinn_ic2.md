@@ -1,6 +1,6 @@
-# PINN para adsorção em leito fixo (IC2): resumo das Fases 0 a 4 e dos estudos de hiperparâmetros
+# PINN para adsorção em leito fixo (IC2): resumo das Fases 0 a 5 e dos estudos de hiperparâmetros
 
-Eduardo A. Staudt, 20 de novembro de 2026 (branch `pinn-v23b`)
+Eduardo A. Staudt, 21 de novembro de 2026 (branch `pinn-v23b`)
 
 ## 1. Objetivo
 
@@ -61,6 +61,7 @@ Tabela 1. Resultado principal de cada fase.
 | 4 | Determinismo e continuação do treino longo | 0,931 a 0,933 (platô) |
 | Optuna | 60 combinações de hiperparâmetros na etapa (b) e confirmação com 2 seeds | 0,973 na (b) e 0,940 na (c) com 50 mil passos, contra 0,928 e 0,900 da configuração anterior |
 | Optuna 2 | 60 combinações com faixas abertas e 6 ativações, confirmação com 2 seeds | 0,975 na (b) e 0,944 na (c), empate com o padrão (0,973 e 0,940) |
+| 5 | Treino longo da (c) com o padrão, etapa (a), versão barata e piores casos | 0,957 na (c) com 200 mil passos (0,953 e 0,962), 0,995 na (a) |
 
 Fonte: Autoria própria.
 
@@ -263,6 +264,47 @@ Como a Mish ficou sem nenhuma combinação, rodei uma ablação extra: a 1ª do 
 Por isso o padrão continua o mesmo, e não mudei nenhum config. A 3ª do segundo estudo empata com a padrão usando uma rede um pouco menor (7 camadas em vez de 8, 17,9 ms por passo contra 19,9 ms), mas isso sozinho não justifica a troca. Rodar 2 treinos juntos não deu ganho com essas redes, porque cada um ficou cerca de 2,1 vezes mais lento ao lado do outro. O estudo e a confirmação levaram 5,8 h, perto do previsto no plano (5,5 a 5,8 h). O relatório completo
 está em `docs/optuna2_results.md`.
 
+### 4.6. Fase 5: treino longo com o padrão
+
+Com a busca de hiperparâmetros encerrada, treinei o padrão (a 1ª combinação do primeiro estudo) por
+200 mil passos na etapa (c), com 2 seeds e um treino por vez na GPU. As duas seeds chegaram a
+0,953 e 0,962 (média de 0,957), contra 0,940 do mesmo modelo com 50 mil passos e 0,932 do modelo
+antigo com 200 mil. Foi a primeira vez que a etapa (c) passou da meta de 0,95, nas duas seeds. O
+erro da temperatura de saída caiu de 14,9 K para 13,9 K. Cada seed custou 1,1 GPU-h.
+
+A curva de validação ainda subia no fim (0,006 e 0,008 nos últimos 25 mil passos). Antes do treino
+implementei um critério de platô (`phase2.plateau_stop`, desligado por padrão): ele para quando o
+y R² ganha menos de 0,002 em duas avaliações seguidas, ou seja, 50 mil passos sem ganho. Como
+combinado, o treino rodou os 200 mil passos completos e só registrou onde o critério teria parado.
+Ele não teria parado em nenhuma das seeds. A seed 0 caiu para 0,859 aos 125 mil passos, mas logo
+depois voltou a subir, e por isso a contagem nunca chegou a 2.
+
+Na etapa (a), que ainda não tinha sido rodada com o padrão, o y R² foi de 0,967 (configuração
+antiga) para 0,995, e o erro da temperatura de saída de 3,1 K para 0,9 K. A versão barata (rede de
+6 × 128, o resto igual ao padrão) ficou 0,011 abaixo na (b) (0,963 contra 0,973) e 0,012 abaixo na
+(c) (0,929 contra 0,940), com metade do tempo por passo (10 ms contra 20 ms) e um terço dos pesos.
+As duas diferenças ficaram abaixo de 0,015, então ela fica registrada como alternativa barata, mas
+o padrão não muda. A diferença é a mesma nas duas etapas e maior que a diferença entre as seeds de
+cada configuração, então a rede grande é melhor, só que por pouco.
+
+Os 5 piores casos da etapa (c), no melhor treino (seed 1), se dividem em dois grupos. Os três
+piores (y R² de 0,70, 0,79 e 0,91) são os três casos mais quentes dos 20, com a temperatura de
+saída subindo 143, 167 e 83 K no MOL. A PINN prevê só 28 a 82 K, com um pico largo e adiantado
+onde o MOL tem um pico estreito na frente, e a frente dela chega 15 a 38 % antes. Os outros dois
+(0,955 e 0,964) aquecem pouco (7 a 10 K), e neles a frente da PINN chega atrasada. Nenhum
+parâmetro ficou na mesma ponta do domínio nos 5 casos. Os três casos quentes têm a capacidade do
+gás forte acima do percentil 90, mas outros quatro casos com capacidade alta têm R² acima de 0,97.
+O melhor indicador sozinho é o aumento de temperatura (correlação de Spearman de −0,71 com o R² de
+cada caso). O treino longo ajudou justamente esses casos quentes (de 0,61 para 0,79 e de 0,62 para
+0,70), mas eles continuam puxando o R² para baixo.
+
+O fine-tune da híbrida agora parte desse treino longo (`runs/phase5c_long_seed1`) e herda a
+configuração padrão da etapa (c), com λ_data = 0,1 fixo, taxa de aprendizado de 10⁻⁴ e 20 mil
+passos. Ele continua esperando o dataset v23b. A suíte de testes passou 5 vezes seguidas (153
+testes). A falha isolada de 19 de novembro não voltou, e como não dá pra saber qual teste falhou,
+ela ficou documentada em `docs/known_limitations.md`. Agora cada teste que falhar fica registrado
+em `runs/pytest_failures.log`. O relatório completo está em `docs/phase5_results.md`.
+
 ## 5. Limitações
 
 As referências ainda são provisórias (MOL deste repositório, não o v23b), e só testei 2 gases e 1
@@ -284,17 +326,14 @@ prática: a vantagem de 0,015 que a melhor combinação tinha em 15 mil passos s
 
 ## 6. O que falta
 
-Antes do dataset, dois testes curtos fazem sentido. O primeiro é confirmar com 2 seeds e 50 mil
-passos a versão barata da ablação (rede de 6 × 128 com SiLU, escala 0,30 e energia 2,2), cerca de
-30 a 40 min. Se ela ficar a menos de 0,015 da melhor, ela vira o padrão no lugar da rede grande,
-com menos da metade do custo. O segundo é um treino longo da etapa (c) com o padrão novo, para ver
-quanto ele ainda ganha depois dos 50 mil passos (a configuração anterior foi de 0,900 para 0,932
-com 200 mil). O segundo estudo não achou nada melhor que o padrão, então esse treino longo continua
-sendo com ele. Com o dataset v23b, primeiro vou reavaliar a PINN física da etapa (c) nos casos
-dele. Depois vem o fine-tune da híbrida, que já está pronto: ele parte da rede física pré-treinada
-e acrescenta os dados de saída com λ_data = 0,1 fixo (`configs/phase3_finetune_c.yaml`). Hoje ele
-parte do treino longo antigo, e o melhor é trocar pelo treino longo da configuração nova. Em
-seguida vem a comparação com a MLP do outro repositório, no mesmo dataset e holdout. Também quero ver se o solver
-v23b resolve o caso 21. Mais pra frente ficam mais de 2 gases (o código já aceita, falta testar) e
-as 2 camadas com XPINN (uma rede por camada), que ainda não implementei. Os relatórios de cada fase
-estão em `docs/phase0_results.md` a `docs/phase4_results.md`.
+Os testes curtos antes do dataset estão feitos: o treino longo da etapa (c) com o padrão, a etapa
+(a) e a versão barata. Com o dataset v23b, primeiro vou reavaliar a PINN física da etapa (c) nos
+casos dele. Depois vem o fine-tune da híbrida, que já está pronto e parte do treino longo novo
+(`configs/phase3_finetune_c.yaml`). Em seguida vem a comparação com a MLP do outro repositório, no
+mesmo dataset e holdout. Os casos muito exotérmicos são o ponto fraco da etapa (c), e uma ideia
+para depois é concentrar mais pontos de colocação neles, usando o aumento de temperatura estimado a
+partir de θ. A curva do treino longo ainda subia no fim, então um treino de 400 mil passos (cerca
+de 2,2 GPU-h por seed) também pode ganhar alguma coisa. Também quero ver se o solver v23b resolve o
+caso 21. Mais pra frente ficam mais de 2 gases (o código já aceita, falta testar) e as 2 camadas
+com XPINN (uma rede por camada), que ainda não implementei. Os relatórios de cada fase estão em
+`docs/phase0_results.md` a `docs/phase5_results.md`.
