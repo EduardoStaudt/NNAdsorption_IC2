@@ -1,6 +1,6 @@
-# PINN para adsorção em leito fixo (IC2): resumo das Fases 0 a 4 e do estudo de hiperparâmetros
+# PINN para adsorção em leito fixo (IC2): resumo das Fases 0 a 4 e dos estudos de hiperparâmetros
 
-Eduardo A. Staudt, 19 de novembro de 2026 (branch `pinn-v23b`)
+Eduardo A. Staudt, 20 de novembro de 2026 (branch `pinn-v23b`)
 
 ## 1. Objetivo
 
@@ -60,6 +60,7 @@ Tabela 1. Resultado principal de cada fase.
 | 3 | Treino longo da etapa (c), ablação e variações | 0,932 com 200 mil passos |
 | 4 | Determinismo e continuação do treino longo | 0,931 a 0,933 (platô) |
 | Optuna | 60 combinações de hiperparâmetros na etapa (b) e confirmação com 2 seeds | 0,973 na (b) e 0,940 na (c) com 50 mil passos, contra 0,928 e 0,900 da configuração anterior |
+| Optuna 2 | 60 combinações com faixas abertas e 6 ativações, confirmação com 2 seeds | 0,975 na (b) e 0,944 na (c), empate com o padrão (0,973 e 0,940) |
 
 Fonte: Autoria própria.
 
@@ -217,6 +218,51 @@ confirmação levariam um por vez. O ganho foi de 1,36 vezes no estudo, de trein
 1,15 a 1,18 vezes nos treinos longos da confirmação. O relatório completo está em
 `docs/optuna_stage_b_results.md`.
 
+### 4.5. Segundo estudo Optuna (etapa b)
+
+A melhor combinação do primeiro estudo ficou na borda de três faixas: 8 camadas (o máximo), 128
+Fourier features (o máximo) e escala de 0,30 (perto do mínimo). Antes do treino longo, fiz um
+segundo estudo com essas faixas abertas e com mais quatro ativações suaves: GELU, softplus, Mish e
+sin. A sin usa a inicialização da SIREN (rede com ativação seno), mas com w0 = 1 em vez do 30 do
+artigo, porque com w0 = 30 e com w0 = 5 a rede não aprendeu nada em 2500 passos. Foram de novo 60
+combinações de 15 mil passos, agora 2 por vez na GPU com 6,8 GB cada, porque as redes maiores não
+cabiam nos 3 GB do primeiro estudo. A primeira combinação foi a melhor do primeiro estudo, e ela
+repetiu o y R² até a última casa decimal, mesmo treinando ao lado de outra e com outro limite de
+memória.
+
+O estudo levou 3,6 h. A melhor combinação, com 8 camadas de 192 neurônios, SiLU, taxa de
+aprendizado de 1,7 × 10⁻³, peso 0,32 para a energia e Cauchy com c = 49, chegou a 0,967 em 15 mil
+passos. A melhor do primeiro estudo ficou em 13º lugar entre as 26 que chegaram ao fim, com 0,952.
+As bordas antigas se resolveram, mas o peso da energia foi de novo para a borda de baixo da faixa
+(0,3). O Optuna ficou quase só na SiLU, com 49 das 60 combinações e todas as 10 melhores. A Mish não
+foi sorteada nenhuma vez, e as duas combinações com sin não aprenderam (y R² de −0,64 e −1,47).
+Nenhuma combinação divergiu. Na confirmação, com 50 mil passos e 2 seeds, a vantagem sumiu
+(Tabela 6).
+
+Tabela 6. Confirmação do segundo estudo na etapa (b) com 50 mil passos (y R² na validação).
+
+| Configuração | Seed 0 | Seed 1 | Média | Pior caso (média) | RMSE de T na saída (média) |
+|---|---|---|---|---|---|
+| Padrão (1ª do primeiro estudo, 8 × 224) | 0,974 | 0,973 | 0,973 | 0,842 | 9,2 K |
+| 1ª do segundo estudo (8 × 192) | 0,974 | 0,970 | 0,972 | 0,869 | 9,8 K |
+| 2ª do segundo estudo (10 × 224) | 0,966 | 0,977 | 0,972 | 0,877 | 12,1 K |
+| 3ª do segundo estudo (7 × 224) | 0,974 | 0,976 | 0,975 | 0,862 | 9,3 K |
+
+Fonte: Autoria própria.
+
+As quatro ficaram a menos de 0,003 uma da outra, bem abaixo da diferença de 0,015 entre seeds. As
+combinações novas aprendem mais rápido, que é o que um treino de 15 mil passos premia, mas não
+terminam mais alto. A padrão ganhou 0,021 entre 15 mil e 50 mil passos, e a 1ª do segundo estudo só
+0,006. As duas com o peso da energia mais baixo também erraram mais a temperatura de saída, e uma
+seed da 2ª ficou bem pior que a outra nesse ponto (RMSE de 15,0 K contra 9,2 K). Na etapa (c), a 3ª
+do segundo estudo, que teve a melhor média na (b), deu 0,948 e 0,939 (média de 0,944), contra 0,941
+e 0,940 da padrão. De novo a diferença ficou menor que a das seeds.
+
+Como a Mish ficou sem nenhuma combinação, rodei uma ablação extra: a 1ª do segundo estudo com cada uma das outras 5 ativações, com todo o resto igual (15 mil passos, 1 seed). A SiLU continuou na frente (0,967), com a Mish (0,960) e a GELU (0,954) logo atrás. A tanh e a softplus ficaram 0,05 a 0,06 abaixo, e a sin chegou a 0,71 aos 5 mil passos e depois piorou até −0,32, sem divergir.
+
+Por isso o padrão continua o mesmo, e não mudei nenhum config. A 3ª do segundo estudo empata com a padrão usando uma rede um pouco menor (7 camadas em vez de 8, 17,9 ms por passo contra 19,9 ms), mas isso sozinho não justifica a troca. Rodar 2 treinos juntos não deu ganho com essas redes, porque cada um ficou cerca de 2,1 vezes mais lento ao lado do outro. O estudo e a confirmação levaram 5,8 h, perto do previsto no plano (5,5 a 5,8 h). O relatório completo
+está em `docs/optuna2_results.md`.
+
 ## 5. Limitações
 
 As referências ainda são provisórias (MOL deste repositório, não o v23b), e só testei 2 gases e 1
@@ -233,7 +279,8 @@ chegaram a diferir 0,015 no y R² (Fase 3), então toda comparação continua us
 O estudo Optuna escolheu as combinações pelos mesmos 20 casos de validação da etapa (b) que usei na
 confirmação, então o número da (b) pode estar um pouco otimista. O teste na etapa (c), com outros
 casos, é o que mostra que o ganho não vem só dessa seleção. O estudo também favorece configurações
-que aprendem rápido, porque comparou treinos de só 15 mil passos.
+que aprendem rápido, porque comparou treinos de só 15 mil passos. O segundo estudo mostrou isso na
+prática: a vantagem de 0,015 que a melhor combinação tinha em 15 mil passos sumiu em 50 mil.
 
 ## 6. O que falta
 
@@ -242,7 +289,8 @@ passos a versão barata da ablação (rede de 6 × 128 com SiLU, escala 0,30 e e
 30 a 40 min. Se ela ficar a menos de 0,015 da melhor, ela vira o padrão no lugar da rede grande,
 com menos da metade do custo. O segundo é um treino longo da etapa (c) com o padrão novo, para ver
 quanto ele ainda ganha depois dos 50 mil passos (a configuração anterior foi de 0,900 para 0,932
-com 200 mil). Com o dataset v23b, primeiro vou reavaliar a PINN física da etapa (c) nos casos
+com 200 mil). O segundo estudo não achou nada melhor que o padrão, então esse treino longo continua
+sendo com ele. Com o dataset v23b, primeiro vou reavaliar a PINN física da etapa (c) nos casos
 dele. Depois vem o fine-tune da híbrida, que já está pronto: ele parte da rede física pré-treinada
 e acrescenta os dados de saída com λ_data = 0,1 fixo (`configs/phase3_finetune_c.yaml`). Hoje ele
 parte do treino longo antigo, e o melhor é trocar pelo treino longo da configuração nova. Em
