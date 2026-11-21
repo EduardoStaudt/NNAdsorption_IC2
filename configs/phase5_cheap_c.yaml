@@ -1,0 +1,19 @@
+# Phase 5, item 3: the cheap version of the default on stage (c): 6 x 128 instead of 8 x 224, all the
+# rest as trial 26 (SiLU, 128 Fourier features at sigma_t 0.297, energy weight 2.23, lr 6.2e-4,
+# Cauchy c 24.3, 1024 theta). Physics only, 50 000 steps, curve every 10 000, seeds 0 and 1.
+# Compared with the trial 26 confirmation runs (runs/optuna_b/confirm_c/t0026_seed{0,1}).
+inherit: phase2_stage_c.yaml
+
+model:
+  width: 128
+  depth: 6
+
+loss:
+  weights:
+    data: 0.0
+
+phase2:
+  eval_every: 10000
+
+logging:
+  run_name: phase5c_cheap
