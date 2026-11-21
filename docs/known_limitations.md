@@ -92,3 +92,18 @@ in `figures/limitations/flow_reversal_seed21.json`.*
 - **Other cases.** No case of the MOL datasets reverses. The lowest v/v_s is 0.255 over the 60
   Phase 1 cases, 0.311–0.775 over the three validation sets, and 0.548 for hard seed 38. Seed 62
   (MOL over 3 h) was not checked. Nothing in the sampling rules out other reversing cases.
+
+## 2. One unexplained test failure (2026-11-19)
+
+On 2026-11-19 one run of the full suite gave `1 failed, 145 passed`. The run printed only its last
+line and the pytest cache was cleared afterwards, so the failing test is unknown. That run started
+3 s after a script rewrote `scripts/optuna_stage_b.py` and `tests/test_optuna_stage_b.py` on the
+Windows disk (/mnt/c, seen from WSL) to split a commit. The likely cause is that pytest read the
+files while they were being changed, but this cannot be confirmed.
+
+It did not happen again: the same version passed 2 times, `tests/test_optuna_stage_b.py` alone
+passed 10 times, the final version passed 2 times (148 tests), and in Phase 5 the full suite
+passed 5 times in a row (153 passed each time, about 93 s per run, logs in
+`runs/phase5_pytest_{1..5}.log`). Without the name of the test there is nothing to fix, so
+instead `tests/conftest.py` appends each failed test (time, commit, test and
+traceback) to `runs/pytest_failures.log`, so a rare failure leaves a trace.

@@ -37,3 +37,29 @@ def mol_example(example_case):
 
     p, s = example_case
     return solve_case(p, s.t_final, TEST_SOLVER)
+
+
+# A full-suite run on 2026-11-19 had one failure that did not repeat and whose test was never
+# identified (docs/known_limitations.md, section 2). Every failed test is now appended, with the
+# time and the commit, to runs/pytest_failures.log (not versioned), so a rare failure leaves a trace.
+FAILURE_LOG = os.path.join(REPO_ROOT, "runs", "pytest_failures.log")
+
+
+def pytest_runtest_logreport(report):
+    if not report.failed:
+        return
+    import subprocess
+    import time
+
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture_output=True,
+                                text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = "?"
+    try:
+        os.makedirs(os.path.dirname(FAILURE_LOG), exist_ok=True)
+        with open(FAILURE_LOG, "a", encoding="utf-8") as f:
+            f.write("%s | %s | %s (%s)\n%s\n\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), commit, report.nodeid,
+                                                  report.when, str(report.longrepr)[-3000:]))
+    except OSError:
+        pass
