@@ -1,0 +1,10 @@
+# Phase 6, item 3 (only if item 2 helps: hot-case R2 +0.03 and pooled R2 not 0.005 lower): the hot
+# collocation of configs/phase6_hot_200k.yaml with 400 000 steps. Seeds 0 and 1.
+inherit: phase6_hot_200k.yaml
+
+train:
+  steps: 400000
+
+logging:
+  run_name: phase6c_hot_400k
+  keep_checkpoints: 17

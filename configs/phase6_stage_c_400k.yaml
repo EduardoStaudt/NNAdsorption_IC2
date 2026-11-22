@@ -1,0 +1,11 @@
+# Phase 6, item 1: the default (trial 26) on stage (c), physics only, 400 000 steps from scratch
+# (the cosine decay spans the 400 000 steps). Curve every 25 000 steps. Compared with the 200 000-step
+# run of Phase 5 (configs/phase5_stage_c_long.yaml). Seeds 0 and 1.
+inherit: phase5_stage_c_long.yaml
+
+train:
+  steps: 400000
+
+logging:
+  run_name: phase6c_400k
+  keep_checkpoints: 17
