@@ -33,6 +33,8 @@ theta_colloc:             # training/theta_colloc.py
   scaler_n_theta: 8192    # Sobol theta used to fit the theta normalization (fixed for the run)
   front_frac: 0.0         # > 0: this fraction of the points of each renewal near the fronts (sum_i |dc~_i/dt~|)
   front_candidates: 4     # uniform candidates screened per front point
+  hot_frac: 0.0           # > 0: this fraction of the Sobol theta weighted by the feed estimate of the temperature rise (Phase 6)
+  hot_candidates: 4       # Sobol candidates per hot theta
 
 phase2:
   train_data: base_case   # base_case: MOL reference of domain.base_case (Phase 0) | dataset: Phase 1 training split of data.path

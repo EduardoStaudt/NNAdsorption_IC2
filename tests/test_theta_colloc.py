@@ -184,3 +184,44 @@ def test_pretrained_setup_reuses_network_scales_scaler_and_weights(tmp_path):
     model2.load_weights(os.path.join(tmp_path, "model.weights.h5"))
     for a, b in zip(model.trainable_variables, model2.trainable_variables):
         np.testing.assert_array_equal(a.numpy(), b.numpy())
+
+
+def test_hot_theta_lean_towards_large_temperature_rise():
+    from nnads_ic2.training.theta_colloc import feed_rise
+
+    cfg = small_cfg()
+    cfg["domain"]["vary"] = ["vs", "y0", "Tin", "L0_c1_dH", "L0_c1_qm_ref"]
+    cfg["theta_colloc"].update(n_theta=256, hot_frac=0.5, hot_candidates=8, hot_cap_n=256)
+    col = make_colloc(cfg)
+    assert col.n_hot == 128 and len(col.theta_cases) == 256
+    floor = float(cfg["scales"]["q_ref_floor"])
+    uniform = np.array([feed_rise(p, floor) for p in col.theta_cases[:128]])
+    hot = np.array([feed_rise(p, floor) for p in col.theta_cases[128:]])
+    # P ~ rise tilts the mean up by var/mean of the rise (about 1 + CV^2 times the uniform mean)
+    expected = np.mean(uniform) * (1.0 + 0.5 * np.var(uniform) / np.mean(uniform) ** 2)
+    assert np.mean(hot) > expected
+    col.resample()
+    info = col.info()
+    assert info["hot_draws"] == 2 and info["hot_mean_rise_K"] > info["uniform_mean_rise_K"]
+    assert len(col.theta_cases) == 256
+
+
+def test_hot_frac_zero_keeps_the_uniform_draw():
+    cfg = small_cfg()
+    a = make_colloc(cfg).theta_cases
+    cfg["theta_colloc"]["hot_frac"] = 0.0
+    b = make_colloc(cfg).theta_cases
+    assert all(np.array_equal(x.to_theta(), y.to_theta()) for x, y in zip(a, b))
+
+
+def test_weighted_pick_is_without_replacement_and_follows_the_weights():
+    from nnads_ic2.training.theta_colloc import weighted_pick
+
+    rng = np.random.default_rng(0)
+    idx = weighted_pick(np.ones(10), 10, rng)
+    assert sorted(idx) == list(range(10))
+    w = np.r_[np.full(50, 1.0), np.full(50, 100.0)]
+    counts = np.zeros(100)
+    for _ in range(200):
+        counts[weighted_pick(w, 10, rng)] += 1
+    assert counts[50:].sum() > 0.9 * counts.sum()
