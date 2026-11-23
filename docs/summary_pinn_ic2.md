@@ -1,6 +1,6 @@
-# PINN para adsorção em leito fixo (IC2): resumo das Fases 0 a 5 e dos estudos de hiperparâmetros
+# PINN para adsorção em leito fixo (IC2): resumo das Fases 0 a 6 e dos estudos de hiperparâmetros
 
-Eduardo A. Staudt, 21 de novembro de 2026 (branch `pinn-v23b`)
+Eduardo A. Staudt, 22 de novembro de 2026 (branch `pinn-v23b`)
 
 ## 1. Objetivo
 
@@ -62,6 +62,7 @@ Tabela 1. Resultado principal de cada fase.
 | Optuna | 60 combinações de hiperparâmetros na etapa (b) e confirmação com 2 seeds | 0,973 na (b) e 0,940 na (c) com 50 mil passos, contra 0,928 e 0,900 da configuração anterior |
 | Optuna 2 | 60 combinações com faixas abertas e 6 ativações, confirmação com 2 seeds | 0,975 na (b) e 0,944 na (c), empate com o padrão (0,973 e 0,940) |
 | 5 | Treino longo da (c) com o padrão, etapa (a), versão barata e piores casos | 0,957 na (c) com 200 mil passos (0,953 e 0,962), 0,995 na (a) |
+| 6 | 400 mil passos e colocação concentrada nos casos quentes | 0,963 na (c) com colocação quente e 200 mil passos (0,963 e 0,963), 400 mil passos não ganham nada |
 
 Fonte: Autoria própria.
 
@@ -305,6 +306,33 @@ testes). A falha isolada de 19 de novembro não voltou, e como não dá pra sabe
 ela ficou documentada em `docs/known_limitations.md`. Agora cada teste que falhar fica registrado
 em `runs/pytest_failures.log`. O relatório completo está em `docs/phase5_results.md`.
 
+### 4.7. Fase 6: 400 mil passos e colocação nos casos quentes
+
+Testei duas coisas na etapa (c), com 2 seeds cada e o padrão t26. A primeira foi dobrar o treino
+para 400 mil passos. Não ganhou nada: o y R² médio foi 0,959, contra 0,957 com 200 mil, dentro da
+diferença entre seeds. A curva explica o motivo. Com o decaimento cosseno espalhado por 400 mil
+passos, a taxa de aprendizado fica alta por mais tempo e as duas seeds desabaram no meio do treino
+(R² de 0,73 em 125 mil e 0,76 em 150 mil). Depois elas se recuperaram e terminaram no mesmo lugar do
+treino de 200 mil, gastando o dobro (2,2 GPU-h por seed).
+
+A segunda foi concentrar a colocação nos casos quentes. Estimo o aumento de temperatura de cada θ
+pela alimentação (ΔT_est = Σ y_i (−ΔH_i) q_ref,i / Cps), que tem correlação de Spearman de 0,87 com o
+aumento medido nos 20 casos de validação. Em cada reamostragem, metade dos 1024 θ é Sobol uniforme e
+a outra metade é sorteada entre 4 vezes mais candidatos com probabilidade proporcional a ΔT_est
+(limitado ao percentil 99, 307 K). Os θ sorteados têm aumento médio de 109 K, contra 47 K dos
+uniformes. Com 200 mil passos, o R² dos 5 casos quentes (6, 11, 2, 9 e 16) subiu de 0,859 para
+0,890, o dos 3 piores de 0,784 para 0,825 e o R² geral de 0,957 para 0,963, com as duas seeds acima
+de 0,962. O custo apareceu nos 15 casos frios, que caíram 0,003. O caso 16 tem aumento de 43 K, então
+o grupo aprovado como "acima de 50 K" corresponde na prática a um limiar de 40 K. Os 3 piores foram
+escolhidos pelo erro nesse mesmo conjunto, por isso uso os 5 quentes como métrica principal.
+
+Como a colocação quente passou no critério combinado (3 piores +0,042 e R² geral sem queda), rodei
+ela também com 400 mil passos. Ficou em 0,958, um pouco abaixo da versão de 200 mil, com o mesmo
+colapso no meio do treino. A melhor configuração até agora é a colocação quente com 200 mil passos
+(`configs/phase6_hot_200k.yaml`, melhor treino `runs/phase6c_hot_200k_seed0` com 0,963). Ela não
+virou padrão porque isso depende de aprovação. Os casos 6 e 11, os mais quentes (143 e 167 K),
+continuam entre 0,74 e 0,80. O relatório completo está em `docs/phase6_results.md`.
+
 ## 5. Limitações
 
 As referências ainda são provisórias (MOL deste repositório, não o v23b), e só testei 2 gases e 1
@@ -326,14 +354,13 @@ prática: a vantagem de 0,015 que a melhor combinação tinha em 15 mil passos s
 
 ## 6. O que falta
 
-Os testes curtos antes do dataset estão feitos: o treino longo da etapa (c) com o padrão, a etapa
-(a) e a versão barata. Com o dataset v23b, primeiro vou reavaliar a PINN física da etapa (c) nos
-casos dele. Depois vem o fine-tune da híbrida, que já está pronto e parte do treino longo novo
-(`configs/phase3_finetune_c.yaml`). Em seguida vem a comparação com a MLP do outro repositório, no
-mesmo dataset e holdout. Os casos muito exotérmicos são o ponto fraco da etapa (c), e uma ideia
-para depois é concentrar mais pontos de colocação neles, usando o aumento de temperatura estimado a
-partir de θ. A curva do treino longo ainda subia no fim, então um treino de 400 mil passos (cerca
-de 2,2 GPU-h por seed) também pode ganhar alguma coisa. Também quero ver se o solver v23b resolve o
-caso 21. Mais pra frente ficam mais de 2 gases (o código já aceita, falta testar) e as 2 camadas
-com XPINN (uma rede por camada), que ainda não implementei. Os relatórios de cada fase estão em
-`docs/phase0_results.md` a `docs/phase5_results.md`.
+Os testes antes do dataset estão feitos: treino longo, etapa (a), versão barata, 400 mil passos e
+colocação quente. Falta decidir se a colocação quente com 200 mil passos vira o padrão da etapa (c)
+e se o fine-tune da híbrida passa a partir dela. Com o dataset v23b, primeiro vou reavaliar a PINN
+física da etapa (c) nos casos dele. Depois vem o fine-tune da híbrida (`configs/phase3_finetune_c.yaml`)
+e a comparação com a MLP do outro repositório, no mesmo dataset e holdout. Treinos mais longos só
+fazem sentido com outro cronograma de taxa de aprendizado, porque o cosseno de 400 mil passos deixou
+o treino instável no meio. Também quero ver se o solver v23b resolve o caso 21. Mais pra frente ficam
+mais de 2 gases (o código já aceita, falta testar) e as 2 camadas com XPINN (uma rede por camada),
+que ainda não implementei. Os relatórios de cada fase estão em `docs/phase0_results.md` a
+`docs/phase6_results.md`.

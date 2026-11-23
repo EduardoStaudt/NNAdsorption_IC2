@@ -14,6 +14,11 @@ com rede de 6 × 128 (`configs/phase5_cheap_{b,c}.yaml`). Com 50 mil passos ela 
 padrão na etapa (b) e 0,012 abaixo na (c), com metade do tempo por passo (10 ms contra 20 ms). O
 fine-tune da híbrida (`configs/phase3_finetune_c.yaml`) parte de `runs/phase5c_long_seed1`.
 
+Na Fase 6 (22 de novembro), a colocação concentrada nos casos quentes (`theta_colloc.hot_frac` 0,5,
+`configs/phase6_hot_200k.yaml`) chegou a 0,963 com 200 mil passos nas duas seeds. Ela é candidata a
+novo padrão da etapa (c), mas o padrão continua com `hot_frac` 0 até a aprovação. Treinar 400 mil
+passos não melhorou nem o uniforme nem o quente (`docs/phase6_results.md`).
+
 ## Mudanças do estudo Optuna
 
 Tabela 1. O que mudou no padrão das etapas com o estudo Optuna.
