@@ -22,6 +22,10 @@ theta_colloc:
   # new theta every ~2600 steps, as with 2048 theta every 10 passes: 10 x (50 + 2048) / (50 + 1024)
   # passes over the pool of the 50 fixed training theta and the 1024 Sobol theta
   resample_every_epochs: 19.534450651769
+  # Since Phase 6 (docs/phase6_results.md): half of the Sobol theta are picked with probability
+  # proportional to the feed estimate of the temperature rise (hot collocation). Runs before Phase 6
+  # used 0.0: configs/phase2_stage_c_before_hot.yaml.
+  hot_frac: 0.5
 
 logging:
   run_name: phase2c

@@ -225,3 +225,19 @@ def test_weighted_pick_is_without_replacement_and_follows_the_weights():
     for _ in range(200):
         counts[weighted_pick(w, 10, rng)] += 1
     assert counts[50:].sum() > 0.9 * counts.sum()
+
+
+def test_hot_collocation_is_the_stage_c_default_and_old_configs_keep_uniform_theta():
+    """Phase 6: hot_frac 0.5 in phase2_stage_c.yaml; the configs of earlier runs resolve to 0.0."""
+    def hot(name):
+        return load_config(os.path.join(REPO_ROOT, "configs", name))["theta_colloc"]["hot_frac"]
+
+    for name in ("phase2_stage_c.yaml", "phase3_finetune_c.yaml", "phase6_hot_200k.yaml", "phase6_hot_400k.yaml"):
+        assert hot(name) == 0.5, name
+    for name in ("phase2_stage_c_before_hot.yaml", "phase2_stage_c_before_optuna.yaml", "phase5_stage_c_long.yaml",
+                 "phase5_cheap_c.yaml", "phase6_stage_c_400k.yaml", "phase2_stage_b.yaml", "phase2_stage_a.yaml"):
+        assert hot(name) == 0.0, name
+    before = load_config(os.path.join(REPO_ROOT, "configs", "phase2_stage_c_before_hot.yaml"))
+    now = load_config(os.path.join(REPO_ROOT, "configs", "phase2_stage_c.yaml"))
+    now["theta_colloc"]["hot_frac"] = 0.0
+    assert before == now

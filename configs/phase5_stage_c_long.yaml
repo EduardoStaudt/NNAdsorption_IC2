@@ -2,7 +2,7 @@
 # 200 000 steps instead of 50 000 (the cosine decay spans the 200 000 steps). Validation curve every
 # 25 000 steps. The plateau criterion (phase2.plateau_stop) stays off: the full 200 000 steps run
 # and summary.json records where it would have stopped. Seeds 0 and 1 (--set runtime.seed=...).
-inherit: phase2_stage_c.yaml
+inherit: phase2_stage_c_before_hot.yaml  # uniform theta, as when these runs were made
 
 train:
   steps: 200000

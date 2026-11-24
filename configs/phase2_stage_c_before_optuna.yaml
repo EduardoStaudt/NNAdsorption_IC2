@@ -2,7 +2,7 @@
 # defaults in phase2_base.yaml changed to trial 26 of the study (docs/optuna_stage_b_results.md).
 # The configs of Phases 3 and 4 on stage (c) (the long run runs/phase3c_long and what starts from it)
 # and the stage (c) test of the study inherit this file, so they still describe their runs.
-inherit: phase2_stage_c.yaml
+inherit: phase2_stage_c_before_hot.yaml  # uniform theta, as when these runs were made
 
 model:
   depth: 6

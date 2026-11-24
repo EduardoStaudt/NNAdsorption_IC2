@@ -2,7 +2,7 @@
 # rest as trial 26 (SiLU, 128 Fourier features at sigma_t 0.297, energy weight 2.23, lr 6.2e-4,
 # Cauchy c 24.3, 1024 theta). Physics only, 50 000 steps, curve every 10 000, seeds 0 and 1.
 # Compared with the trial 26 confirmation runs (runs/optuna_b/confirm_c/t0026_seed{0,1}).
-inherit: phase2_stage_c.yaml
+inherit: phase2_stage_c_before_hot.yaml  # uniform theta, as when these runs were made
 
 model:
   width: 128
