@@ -107,3 +107,30 @@ passed 5 times in a row (153 passed each time, about 93 s per run, logs in
 `runs/phase5_pytest_{1..5}.log`). Without the name of the test there is nothing to fix, so
 instead `tests/conftest.py` appends each failed test (time, commit, test and
 traceback) to `runs/pytest_failures.log`, so a rare failure leaves a trace.
+
+## 3. The plateau criterion is not safe with a long cosine schedule (Phase 6)
+
+`phase2.plateau_stop` (stop when the validation y R2 gains less than 0.002 over 2 consecutive
+evaluations, `src/nnads_ic2/training/plateau.py`) stays off by default (`enabled: false` in
+`configs/phase2_base.yaml`); the runs only record where it would have stopped.
+
+With the cosine decay spread over 400 000 steps the learning rate stays high for longer, and all four
+400k runs of Phase 6 had a large drop of the validation R2 in the middle of the run, then recovered
+when the learning rate became small (`docs/phase6_results.md`, `docs/figures/phase6/`):
+
+| run | lowest R2 (step) | final R2 | criterion would stop at |
+|---|---|---|---|
+| phase6c_400k_seed0 | 0.728 (125k) | 0.957 | 100k (R2 0.848) |
+| phase6c_400k_seed1 | 0.757 (150k) | 0.960 | 125k (R2 0.898) |
+| phase6c_hot_400k_seed0 | -0.119 (125k) | 0.957 | 75k (R2 0.877) |
+| phase6c_hot_400k_seed1 | 0.546 (175k) | 0.960 | 175k (R2 0.546) |
+
+The criterion reads "no gain" as a plateau, but here "no gain" is often a drop that recovers later.
+It would have stopped every 400k run early, two of them on or next to the dip, and kept a much worse
+model. It also stops a 200k run that is still improving (phase6c_hot_200k_seed1 at 200k, its last
+point). The 200k runs with the same cosine schedule had smaller dips (0.86 at 125k in
+phase5c_long_seed0, 0.85 at 50k in the hot runs), so the risk is there too.
+
+What would make it usable: keep the best checkpoint instead of the last one, require a longer window
+or compare against the best value so far, and use it only when the learning rate is already small
+(late in the cosine). None of this is implemented.
