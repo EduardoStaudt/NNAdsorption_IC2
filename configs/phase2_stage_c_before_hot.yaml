@@ -1,0 +1,7 @@
+# Stage (c) as before Phase 6: uniform Sobol collocation theta (hot_frac 0.0). Since Phase 6 the
+# default of phase2_stage_c.yaml is hot_frac 0.5 (docs/phase6_results.md). The stage (c) configs of
+# the runs made before that change inherit this file, so they still describe their runs.
+inherit: phase2_stage_c.yaml
+
+theta_colloc:
+  hot_frac: 0.0

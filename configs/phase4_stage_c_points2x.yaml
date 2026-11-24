@@ -1,0 +1,12 @@
+# Phase 4, item 2b: as phase4_stage_c_lr_cycle.yaml (start from the long run, 50 000 steps, lr 3e-4
+# restarted) with twice the (z~, t~) collocation points per theta: 1024 instead of 512. The pool is
+# twice as large, so the theta are renewed every 5 passes over it instead of 10: the same 2622
+# steps as before, hence the same theta seen.
+inherit: phase4_stage_c_lr_cycle.yaml
+
+theta_colloc:
+  points_per_theta: 1024
+  resample_every_epochs: 5
+
+logging:
+  run_name: phase4c_points2x

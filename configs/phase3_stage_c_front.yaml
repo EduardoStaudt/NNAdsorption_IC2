@@ -1,0 +1,11 @@
+# Phase 3, item 2: the long stage (c) run (phase3_stage_c_long.yaml) with half of the collocation
+# points of every renewal near the concentration fronts of the current network (probability
+# proportional to sum_i |dc~_i/dt~|, same number of front points for every theta), the other half
+# uniform (Sobol) as before. Same 200 000 steps, same curve and checkpoints.
+inherit: phase3_stage_c_long.yaml
+
+theta_colloc:
+  front_frac: 0.5
+
+logging:
+  run_name: phase3c_front

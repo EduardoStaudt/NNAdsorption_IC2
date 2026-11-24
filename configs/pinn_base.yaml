@@ -1,0 +1,165 @@
+# Base configuration of the hybrid PINN. Every number used by the code comes from here.
+# Child configs use `inherit: pinn_base.yaml` and override only what changes.
+# Paths are relative to the repository root.
+
+runtime:
+  seed: 0
+  dtype: float32          # float32 | float64 (all tensors and Keras layers)
+  tf32: false             # TensorFloat-32 matmuls (~1e-3 relative error): keep off for PINNs
+  deterministic: true     # deterministic GPU kernels: same results run after run (Phase 4: +1.5 % time per step)
+  gpu_memory_mb: null     # > 0: fixed GPU memory for this run (several runs on one GPU); null: take it as needed
+
+physics:
+  n_comp: 2
+  isotherm_p_min_atm: 1.0e-6   # floor on partial pressure inside the PINN (finite d(p^n)/dp); IC1 uses 1e-6 in its slope
+
+scales:
+  q_ref_floor: 1.0e-6     # mol/kg
+  dT_ref_floor: 1.0       # K
+  # dT_ref = max(dT_ref_floor, dT_ratio * feed estimate), feed estimate = sum_i y_i,F (-dH_i) q_ref,i / Cps.
+  # null: dT_ratio = measured rise max|T - Tin| / feed estimate from the reference data (one case:
+  # dT_ref = measured rise; several: median ratio of the training cases). No data: 1 + warning.
+  dT_ratio: null
+  t_final_factor: 2.0     # simulation horizon t_F = factor * t_ref (IC1/v23b: 2)
+
+theta:
+  log_params: [B_ref, kL, dp, Dm]   # parameters sampled log-uniformly in IC1 (multiplicative range)
+  sd_floor: 1.0e-8                  # IC1 fit_scaler: columns with smaller sd keep sd = 1
+
+model:
+  width: 128
+  depth: 6
+  activation: tanh        # tanh | silu | gelu | softplus | mish | sin (SIREN); smooth only, see models/pinn.py
+  siren_w0: 30.0          # activation sin only: y = sin(w0 (x W + b)), w0 of the SIREN paper
+  head_hidden: 1          # hidden layers in each output head
+  head_width: 64
+  hard_ic: true           # initial state exact by construction
+  ic_delta: 0.01          # time scale (in t~) of the hard initial-condition blend
+  fourier:
+    n_features: 64        # 0 disables Fourier features
+    sigma_z: 2.0
+    sigma_t: 1.0
+    seed: 0
+    trainable: false
+
+sampling:
+  n_interior: 4096        # interior collocation points per step
+  n_boundary: 512         # points per step on each of z~ = 0 and z~ = 1
+  n_initial: 512          # only used when hard_ic is false
+  n_data: 1024            # data points per step (when lambda_data > 0)
+  pool_init: 32768        # initial (Sobol) interior pool
+  pool_max: 65536
+  rar:
+    enabled: true
+    every: 1000           # steps
+    n_candidates: 32768
+    n_add: 1024
+
+loss:
+  weights:                # initial group weights; 0 switches a group off
+    data: 0.0
+    pde: 1.0
+    bc: 1.0
+    ic: 0.0
+  # energy x10: T~ stays small (dT_ref from the feed overestimates the real rise), so the energy
+  # residual was too weak and the PINN converged to T~ = 0 (Phase 0, docs/phase0_results.md)
+  pde_terms: {mass: 1.0, ldf: 1.0, energy: 10.0, global: 1.0}
+  robust_c: null          # c > 0: Cauchy loss c log(1 + s/c) of the PDE residual s (stage c of Phase 2)
+  adaptive:
+    method: grad_norm     # fixed | grad_norm (Wang, Teng & Perdikaris 2021)
+    every: 100
+    alpha: 0.1
+    min: 1.0e-3
+    max: 100.0            # cap: easy terms (BC, data) otherwise reach 1e4 and make training noisy (Phase 0)
+    max_data: 10.0        # lower cap for lambda_data: at 100 the Phase 1 hybrid overfitted its training outlets
+    fixed: []             # groups kept at their initial weight, e.g. [data] = fixed lambda_data (no annealing)
+  causal:
+    enabled: true         # Wang, Sankaran & Perdikaris 2022
+    n_bins: 32
+    eps: 0.1
+    growth: 10.0
+    eps_max: 10.0
+    w_min_threshold: 0.99
+
+train:
+  steps: 20000
+  lr: 1.0e-3
+  lr_final_frac: 0.01     # cosine decay down to lr * frac
+  jit_compile: false      # XLA; needs the pip ptxas (runtime.py)
+  lbfgs:
+    enabled: false
+    max_iter: 2000
+    n_interior: 16384
+    tolerance: 1.0e-9
+
+logging:
+  runs_dir: runs
+  every: 100
+  ckpt_every: 5000
+  keep_checkpoints: 3
+  tensorboard: true       # optional: used only if the `tensorboard` package is installed (CSV is always written)
+
+cases:                    # parameter domain (Section 2.3) and prefilter; to be confirmed with the advisor for v23b
+  x_ranges:               # IC1 contract_io.X_RANGES
+    qm_ref: [1.0, 15.0]
+    k2: [-0.1, 0.0]
+    B_ref: [1.0e-4, 1.0]
+    k4: [0.0, 3200.0]
+    n_ref: [0.5, 1.5]
+    k6: [-2200.0, 2200.0]
+    kL: [0.01, 1.0]
+    dH: [5.0e+3, 5.0e+4]
+    Cpg: [25.0, 45.0]
+    eb: [0.30, 0.50]
+    rho_b: [400.0, 900.0]
+    Cps: [800.0, 1200.0]
+    vs: [0.001, 0.05]
+    Tin: [288.0, 323.0]
+    P: [1.0e+5, 3.0e+6]
+    L: [0.3, 1.5]
+    hw: [20.0, 100.0]
+    lam: [0.1, 0.8]
+    dp: [0.5e-3, 5.0e-3]
+    Dm: [5.0e-6, 3.0e-5]
+    Dt: [0.01, 0.06]
+  y0_range: [0.20, 0.75]  # carrier feed fraction (IC1 holdout_10k range)
+  log_params: [B_ref, kL, dp, Dm]   # sampled log-uniformly (IC1 recorder LOG_PARAMS)
+  max_tst_s: 1800.0       # prefilter: slowest front t_st <= 1800 s (t_F <= 3600 s)
+  sev_max: 0.9            # prefilter: IC1 severity < 0.9
+  # IC1 seeds the MOL solver could not solve in the Phase 1 dataset (21: step size below round-off;
+  # 38, 62: more than 1 h). Never drawn again by make_mol_dataset; reported apart (Phase 2).
+  hard_seeds: [21, 38, 62]
+
+domain:                   # where the parametric PINN works (data/domain.py)
+  mode: full              # full: every theta column over cases.x_ranges | subspace: base case + `vary`
+  base_case: configs/cases/ic1_example_h2_co2.json   # subspace: values of the fixed columns (IC1 example_usage)
+  vary: []                # subspace: theta columns that vary (names of physics/params.theta_names)
+
+data:                     # solver dataset (recorder.py h5 format) for Phase 1
+  path: null
+  use_internal_profiles: false   # read profiles/<row>/ when the file has them
+  carrier: 0
+  keys: {}                # other h5 dataset names, e.g. {theta: X_v3} (defaults: data/loader.py DEFAULT_KEYS)
+
+solver:                   # MOL reference solver (physics/mol_solver.py), tests and Phase 0 only
+  nx: 281
+  scheme: vanleer
+  fp_iters: 8
+  n_out: 801
+  rtol: 1.0e-6
+  atol_rel: 1.0e-8
+  method: BDF
+
+eval:
+  aard_min: 1.0e-3        # IC1: AARD only where |reference| > 1e-3
+  interpolate_times: true
+  times:                  # tb from c_i/c_i,F (IC1 recorder); t10..ts from y_i/y_i,F (IC1 compute_level_times)
+    tb: {level: 0.05, signal: c_ratio}
+    t10: {level: 0.10, signal: y_ratio}   # t10/t90: less sensitive than tb/ts to the flat foot and tail of the front
+    t50: {level: 0.50, signal: y_ratio}
+    t90: {level: 0.90, signal: y_ratio}
+    ts: {level: 0.95, signal: y_ratio}    # since Phase 2 (a hot outlet keeps c = yP/RT below 0.95 c_F for long)
+    ts_c: {level: 0.95, signal: c_ratio}  # the former ts (IC1 recorder), kept as an extra column
+  field_grid: {nz: 101, nt: 201}
+  inference_repeats: 50
+  batch_size: 8192

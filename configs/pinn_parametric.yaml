@@ -1,0 +1,28 @@
+# Phase 1: parametric PINN over a few cases (theta as input), hybrid loss (solver data + physics).
+# The dataset is passed with --data (h5 in the IC1 recorder format) until v23b data exist.
+inherit: pinn_base.yaml
+
+data:
+  path: null
+  use_internal_profiles: false
+
+loss:
+  weights:
+    data: 1.0             # hybrid (outlet data); the physics-only variant runs with --set loss.weights.data=0
+
+sampling:                 # the pool is shared by all training cases: ~5k initial points per case for 50 cases
+  pool_init: 262144
+  pool_max: 524288
+
+phase1:
+  n_train_cases: 50
+  n_val_cases: 10
+  split_seed: 0
+  n_time_per_case: 200    # outlet points per training case used as data
+  n_plots: 6              # outlet figures of the first validation cases
+
+train:
+  steps: 50000
+
+logging:
+  run_name: phase1_parametric

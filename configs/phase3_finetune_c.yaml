@@ -1,0 +1,26 @@
+# Hybrid as a fine-tuning step (ready, not run: the hybrid waits for the v23b dataset). Start from
+# the best stage (c) physics run of Phase 6 (200 000 steps with the default and hot collocation,
+# hot_frac 0.5: seed 0, validation y R2 0.963; phase2.init_from takes its weights, network, dT_ratio
+# and theta scaler). Until Phase 6 it started from runs/phase5c_long_seed1 (0.962, uniform theta).
+# Then add the outlet data at a fixed lambda_data = 0.1 (no annealing), with a lower learning rate.
+# Since Phase 5 it inherits the default stage (c) config (trial 26: Cauchy c 24.3, energy weight
+# 2.23, 1024 theta); before, it inherited phase2_stage_c_before_optuna.yaml and started from
+# runs/phase3c_long. With the v23b data: point data.path to it and --val to its validation split.
+# Steps and learning rate are first guesses.
+inherit: phase2_stage_c.yaml
+
+phase2:
+  init_from: runs/phase6c_hot_200k_seed0
+
+loss:
+  weights:
+    data: 0.1
+  adaptive:
+    fixed: [data]
+
+train:
+  steps: 20000
+  lr: 1.0e-4
+
+logging:
+  run_name: phase5c_finetune

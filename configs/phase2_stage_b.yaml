@@ -1,0 +1,13 @@
+# Phase 2, stage (b): 10 parameters vary around the IC1 example_usage case, the others stay fixed.
+# The 4 of stage (a) plus the 6 columns that change t_st and the temperature rise the most
+# (scripts/rank_parameters.py, docs/phase2_results.md): the isotherm of the strong gas (B_ref,
+# qm_ref, n_ref), the exponent of the carrier (its initial loading, i.e. the desorption cooling),
+# the heat of adsorption of the strong gas and the bed length.
+inherit: phase2_base.yaml
+
+domain:
+  mode: subspace
+  vary: [vs, y0, Tin, L0_c1_kL, L0_c1_B_ref, L0_c1_qm_ref, L0_c1_n_ref, L0_c0_n_ref, L0_c1_dH, L]
+
+logging:
+  run_name: phase2b

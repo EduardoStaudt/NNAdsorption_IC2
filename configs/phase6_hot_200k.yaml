@@ -1,0 +1,11 @@
+# Phase 6, item 2: the Phase 5 long run (200 000 steps) with half of the Sobol collocation theta
+# weighted by the feed estimate of the temperature rise (theta_colloc.hot_frac 0.5, 4 candidates per
+# hot theta). Everything else as configs/phase5_stage_c_long.yaml. Seeds 0 and 1.
+inherit: phase5_stage_c_long.yaml
+
+theta_colloc:
+  hot_frac: 0.5
+  hot_candidates: 4
+
+logging:
+  run_name: phase6c_hot_200k

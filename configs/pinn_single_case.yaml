@@ -1,0 +1,15 @@
+# Phase 0 (sanity): one fixed case, forward problem (physics only, no solver data in the loss).
+# The case is the one of IC1 example_usage.py (H2/CO2, Fig. 7 of the IC1 article).
+inherit: pinn_base.yaml
+
+case:
+  path: configs/cases/ic1_example_h2_co2.json
+  carrier: 0              # gas that fills the bed at t = 0 (IC1 convention: component 0)
+  name: ic1_example_h2_co2
+
+loss:
+  weights:
+    data: 0.0             # forward problem; set > 0 to add the solver outlet curve (hybrid)
+
+logging:
+  run_name: phase0_single_case

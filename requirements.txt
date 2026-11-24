@@ -1,0 +1,16 @@
+# Reference environment: WSL2 Ubuntu 22.04, Python 3.11, GPU RTX 5070 Ti (compute capability 12.0).
+# TensorFlow with GPU on Windows only works inside WSL2. Install with:
+#   python3.11 -m venv ~/ic2env && ~/ic2env/bin/python -m pip install -r requirements.txt
+# The [and-cuda] extra brings CUDA 12.9 / cuDNN 9 as pip packages; its ptxas is used by XLA
+# (see src/nnads_ic2/runtime.py), because the system ptxas may not know compute capability 12.0.
+tensorflow[and-cuda]==2.21.0
+tf-keras==2.21.0
+tensorflow-probability==0.25.0
+numpy==2.4.6
+scipy==1.17.1
+pyyaml==6.0.3
+h5py==3.14.0
+matplotlib==3.11.2
+pytest==9.2.0
+optuna==5.1.0           # hyperparameter study (scripts/optuna_stage_b.py), SQLite storage
+scikit-learn==1.9.1     # optuna.importance (fANOVA) for the Optuna study report

@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# Local outputs: training runs, solver caches, datasets (never versioned)
+/runs/
+/outputs/
+/data/
+*.h5
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
