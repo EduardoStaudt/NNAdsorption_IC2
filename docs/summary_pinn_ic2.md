@@ -1,6 +1,6 @@
 # PINN para adsorção em leito fixo (IC2): resumo das Fases 0 a 6 e dos estudos de hiperparâmetros
 
-Eduardo A. Staudt, 22 de novembro de 2026 (branch `pinn-v23b`)
+Eduardo A. Staudt, 24 de novembro de 2026 (branch `pinn-v23b`)
 
 ## 1. Objetivo
 
@@ -329,8 +329,11 @@ escolhidos pelo erro nesse mesmo conjunto, por isso uso os 5 quentes como métri
 Como a colocação quente passou no critério combinado (3 piores +0,042 e R² geral sem queda), rodei
 ela também com 400 mil passos. Ficou em 0,958, um pouco abaixo da versão de 200 mil, com o mesmo
 colapso no meio do treino. A melhor configuração até agora é a colocação quente com 200 mil passos
-(`configs/phase6_hot_200k.yaml`, melhor treino `runs/phase6c_hot_200k_seed0` com 0,963). Ela não
-virou padrão porque isso depende de aprovação. Os casos 6 e 11, os mais quentes (143 e 167 K),
+(`configs/phase6_hot_200k.yaml`, melhor treino `runs/phase6c_hot_200k_seed0` com 0,963). Com a
+aprovação, ela virou o padrão da etapa (c) (`hot_frac` 0,5), e o fine-tune da híbrida passou a partir
+desse treino. Os treinos antigos são reproduzidos por `configs/phase2_stage_c_before_hot.yaml`. O
+critério de platô continua desligado, porque com o cosseno longo ele teria parado os treinos de 400
+mil passos em cima da queda (`docs/known_limitations.md`). Os casos 6 e 11, os mais quentes (143 e 167 K),
 continuam entre 0,74 e 0,80. O relatório completo está em `docs/phase6_results.md`.
 
 ## 5. Limitações
@@ -355,8 +358,8 @@ prática: a vantagem de 0,015 que a melhor combinação tinha em 15 mil passos s
 ## 6. O que falta
 
 Os testes antes do dataset estão feitos: treino longo, etapa (a), versão barata, 400 mil passos e
-colocação quente. Falta decidir se a colocação quente com 200 mil passos vira o padrão da etapa (c)
-e se o fine-tune da híbrida passa a partir dela. Com o dataset v23b, primeiro vou reavaliar a PINN
+colocação quente, que agora é o padrão da etapa (c). Não vou rodar mais treinos até chegar o dataset
+v23b e conversar com o orientador. Com o dataset v23b, primeiro vou reavaliar a PINN
 física da etapa (c) nos casos dele. Depois vem o fine-tune da híbrida (`configs/phase3_finetune_c.yaml`)
 e a comparação com a MLP do outro repositório, no mesmo dataset e holdout. Treinos mais longos só
 fazem sentido com outro cronograma de taxa de aprendizado, porque o cosseno de 400 mil passos deixou

@@ -1,7 +1,7 @@
 # Configuração atual do melhor modelo
 
 Desde o estudo Optuna de 19 de novembro de 2026, o padrão das etapas é o trial 26 do estudo. Desde a
-Fase 5 (21 de novembro), o melhor modelo da etapa (c) é `runs/phase5c_long_seed1`: o mesmo padrão
+Fase 5 (21 de novembro) até a Fase 6, o melhor modelo da etapa (c) foi `runs/phase5c_long_seed1`: o mesmo padrão
 treinado por 200 mil passos (`configs/phase5_stage_c_long.yaml`), só física, com y R² 0,962 nos 20
 casos de validação da etapa (c) (a outra seed deu 0,953). Antes era `runs/optuna_b/confirm_c/t0026_seed0`,
 com 50 mil passos e 0,941. A Tabela 1 mostra o que mudou em relação ao modelo antigo. Fora isso, a
@@ -11,13 +11,15 @@ avaliações mais frequentes (a cada 25 mil passos no treino longo).
 
 Há também uma alternativa barata, registrada na Fase 5 mas que não é o padrão: a mesma configuração
 com rede de 6 × 128 (`configs/phase5_cheap_{b,c}.yaml`). Com 50 mil passos ela ficou 0,011 abaixo do
-padrão na etapa (b) e 0,012 abaixo na (c), com metade do tempo por passo (10 ms contra 20 ms). O
-fine-tune da híbrida (`configs/phase3_finetune_c.yaml`) parte de `runs/phase5c_long_seed1`.
+padrão na etapa (b) e 0,012 abaixo na (c), com metade do tempo por passo (10 ms contra 20 ms).
 
-Na Fase 6 (22 de novembro), a colocação concentrada nos casos quentes (`theta_colloc.hot_frac` 0,5,
-`configs/phase6_hot_200k.yaml`) chegou a 0,963 com 200 mil passos nas duas seeds. Ela é candidata a
-novo padrão da etapa (c), mas o padrão continua com `hot_frac` 0 até a aprovação. Treinar 400 mil
-passos não melhorou nem o uniforme nem o quente (`docs/phase6_results.md`).
+Desde a Fase 6 (aprovado em 24 de novembro), o padrão da etapa (c) usa a colocação concentrada nos
+casos quentes (`theta_colloc.hot_frac` 0,5 em `configs/phase2_stage_c.yaml`). O melhor modelo da
+etapa (c) passou a ser `runs/phase6c_hot_200k_seed0`, com y R² 0,963 (a outra seed também deu 0,963),
+e o fine-tune da híbrida agora parte dele. Os treinos antigos da etapa (c) continuam reproduzíveis
+por `configs/phase2_stage_c_before_hot.yaml` (`hot_frac` 0), que é herdado pelas configurações
+deles. Treinar 400 mil passos não melhorou nem o uniforme nem o quente, e o critério de platô
+continua desligado (`docs/phase6_results.md` e `docs/known_limitations.md`, seção 3).
 
 ## Mudanças do estudo Optuna
 

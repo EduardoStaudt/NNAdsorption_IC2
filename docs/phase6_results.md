@@ -102,7 +102,7 @@ collocation holds at 400k, but the extra 200k steps add nothing.
 1. 200k steps is enough for t26 on stage (c); 400k with the same cosine schedule costs twice and only adds
    instability in the middle of the run.
 2. Hot collocation (hot_frac 0.5) is the best config so far: pooled 0.963 (both seeds above 0.962), hot cases
-   0.890. It is a candidate for the new default of stage (c); the default was not changed (needs approval).
+   0.890. It became the stage (c) default on 2026-11-24 (see section 5).
 3. Cases 6 and 11 (rises of 143 and 167 K) stay at 0.74 to 0.80: the hot sampling helps but does not close
    the gap of the strongest temperature fronts.
 
@@ -112,4 +112,4 @@ Best single run: `runs/phase6c_hot_200k_seed0` (pooled 0.9630).
 
 - Seed 1 of hot 200k took 12.5 h of wall time for 1.15 h of training (00:37 to 13:06); the machine was
   probably suspended. Training time in summary.json is unaffected.
-- The fine-tune config (`configs/phase3_finetune_c.yaml`) still points to `runs/phase5c_long_seed1`.
+- Approved on 2026-11-24: hot_frac 0.5 is the stage (c) default (`configs/phase2_stage_c.yaml`, old runs: `configs/phase2_stage_c_before_hot.yaml`) and the fine-tune (`configs/phase3_finetune_c.yaml`) starts from `runs/phase6c_hot_200k_seed0`. plateau_stop stays off (`docs/known_limitations.md`, section 3).
